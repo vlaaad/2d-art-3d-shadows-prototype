@@ -1,5 +1,6 @@
 [bootstrap]
 main_collection = /main/main.collectionc
+render = /render/prototype.renderc
 
 [script]
 shared_state = 1
@@ -8,6 +9,16 @@ shared_state = 1
 width = 960
 height = 640
 high_dpi = 1
+
+[input]
+game_binding = /builtins/input/all.input_bindingc
+repeat_interval = 0.05
+
+[collection]
+max_instances = 640
+
+[model]
+max_count = 1100
 
 [android]
 input_method = HiddenInputField
@@ -19,6 +30,15 @@ scale = 0.01
 [html5]
 scale_mode = stretch
 
+[render]
+clear_color_red = 0.025
+clear_color_green = 0.045
+clear_color_blue = 0.11
+clear_color_alpha = 1.0
+
 [project]
 title = 2d-art-3d-shadows-prototype
+dependencies#0 = https://github.com/defold/extension-automation-bridge/archive/refs/tags/2.3.2.zip
 
+[automation_bridge]
+application_api = 1

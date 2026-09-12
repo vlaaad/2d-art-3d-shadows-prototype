@@ -1,0 +1,11 @@
+mesh: "/assets/meshes/ground_quad.glb"
+name: "art"
+create_go_bones: false
+materials {
+  name: "art"
+  material: "/materials/ground_receiver.material"
+  textures {
+    sampler: "tex0"
+    texture: "/assets/textures/meadow.png"
+  }
+}

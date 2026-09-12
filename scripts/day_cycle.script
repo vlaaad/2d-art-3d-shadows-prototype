@@ -1,0 +1,131 @@
+go.property("cycle_seconds", 10.0)
+
+local TAU = math.pi * 2.0
+local ACTION_PAUSE = hash("key_space")
+local ACTION_RESET = hash("key_r")
+
+local function clamp(value, minimum, maximum)
+	return math.max(minimum, math.min(maximum, value))
+end
+
+local function mix(a, b, t)
+	return a + (b - a) * t
+end
+
+local function mix_color(a, b, t)
+	return vmath.vector4(
+		mix(a.x, b.x, t),
+		mix(a.y, b.y, t),
+		mix(a.z, b.z, t),
+		1.0
+	)
+end
+
+local function publish_state(self, daylight)
+	automation_bridge.publish("prototype.day_cycle", {
+		phase = self.phase,
+		cycle_seconds = self.cycle_seconds,
+		paused = self.paused,
+		daylight = daylight,
+		period = daylight > 0.55 and "day" or (daylight < 0.25 and "night" or "twilight"),
+	})
+end
+
+local function apply_cycle(self)
+	local angle = self.phase * TAU
+	local daylight = clamp(0.5 + 0.5 * math.cos(angle - math.pi * 0.5), 0.0, 1.0)
+	daylight = daylight * daylight * (3.0 - 2.0 * daylight)
+
+	local radius = 10.0
+	local sun_position = vmath.vector3(
+		math.cos(angle) * radius,
+		5.5 + daylight * 3.5,
+		math.sin(angle) * radius
+	)
+	local target = vmath.vector3(0.0, 0.0, 0.0)
+	local direction = vmath.normalize(target - sun_position)
+	local view = vmath.matrix4_look_at(sun_position, target, vmath.vector3(0.0, 1.0, 0.0))
+	go.set_position(sun_position)
+	go.set_rotation(vmath.quat_matrix4(vmath.inv(view)))
+
+	local night_tint = vmath.vector4(0.48, 0.58, 0.84, 1.0)
+	local day_tint = vmath.vector4(1.0, 0.98, 0.88, 1.0)
+	local sky_night = vmath.vector4(0.025, 0.045, 0.11, 1.0)
+	local sky_day = vmath.vector4(0.38, 0.64, 0.76, 1.0)
+	local tint = mix_color(night_tint, day_tint, daylight)
+	local sky = mix_color(sky_night, sky_day, daylight)
+	local ambient = mix(0.42, 0.46, daylight)
+	local diffuse = mix(0.12, 0.68, daylight)
+	local shadow_strength = mix(0.22, 0.46, daylight)
+
+	msg.post("@render:", "set_day_lighting", {
+		sun_direction = vmath.vector4(direction.x, direction.y, direction.z, 0.0),
+		day_tint = tint,
+		lighting = vmath.vector4(ambient, diffuse, shadow_strength, daylight),
+		sky_color = sky,
+	})
+	return daylight
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	self.phase = 0.18
+	self.paused = false
+	self.publish_elapsed = 1.0
+	automation_bridge.annotate("main:/tree#art", {
+		automation_id = "tree_art",
+		role = "tree",
+	})
+	automation_bridge.annotate("main:/tree#shadow_proxy", {
+		automation_id = "tree_shadow_proxy",
+		role = "shadow_caster",
+	})
+
+	automation_bridge.command("prototype.set_time", function(data)
+		assert(type(data.phase) == "number", "phase must be a number")
+		self.phase = data.phase % 1.0
+		if data.paused ~= nil then
+			self.paused = data.paused == true
+		end
+		local daylight = apply_cycle(self)
+		publish_state(self, daylight)
+		return { phase = self.phase, paused = self.paused, daylight = daylight }
+	end)
+	automation_bridge.command("prototype.set_cycle_paused", function(data)
+		self.paused = data.paused == true
+		local daylight = apply_cycle(self)
+		publish_state(self, daylight)
+		return { paused = self.paused, phase = self.phase }
+	end)
+	automation_bridge.describe("command", "prototype.set_time", {
+		description = "Set normalized time-of-day phase; optionally pause the 10-second cycle.",
+		input_schema = { type = "object", properties = { phase = { type = "number" }, paused = { type = "boolean" } }, required = { "phase" } },
+	})
+	automation_bridge.describe("state", "prototype.day_cycle", {
+		description = "Current time-of-day phase and lighting period.",
+	})
+
+	local daylight = apply_cycle(self)
+	publish_state(self, daylight)
+end
+
+function update(self, dt)
+	if not self.paused then
+		self.phase = (self.phase + dt / self.cycle_seconds) % 1.0
+	end
+	local daylight = apply_cycle(self)
+	self.publish_elapsed = self.publish_elapsed + dt
+	if self.publish_elapsed >= 0.1 then
+		self.publish_elapsed = self.publish_elapsed - 0.1
+		publish_state(self, daylight)
+	end
+end
+
+function on_input(self, action_id, action)
+	if action_id == ACTION_PAUSE and action.pressed then
+		self.paused = not self.paused
+	elseif action_id == ACTION_RESET and action.pressed then
+		self.phase = 0.18
+		self.paused = false
+	end
+end

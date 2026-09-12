@@ -1,0 +1,36 @@
+go.property("count", 500)
+
+local UINT32 = 4294967296
+
+local function random01(self)
+	self.seed = (self.seed * 1664525 + 1013904223) % UINT32
+	return self.seed / UINT32
+end
+
+local function sample_position(self)
+	for _ = 1, 12 do
+		local x = -6.0 + random01(self) * 12.0
+		local z = -4.4 + random01(self) * 8.8
+		if x * x + z * z > 1.35 * 1.35 then
+			return vmath.vector3(x, 0.0, z)
+		end
+	end
+	return vmath.vector3(5.5, 0.0, 4.0)
+end
+
+function init(self)
+	self.seed = 0x5EED123
+	for _ = 1, self.count do
+		local scale = 0.28 + random01(self) * 0.34
+		factory.create("#grass_factory", sample_position(self), nil, nil, vmath.vector3(scale))
+	end
+	automation_bridge.publish("prototype.grass", {
+		count = self.count,
+		shared_model = "/assets/models/grass.model",
+		shared_shadow_proxy = "/assets/models/grass_proxy.model",
+		batchable = true,
+	})
+	automation_bridge.describe("state", "prototype.grass", {
+		description = "Deterministic grass instance count and shared batching resources.",
+	})
+end

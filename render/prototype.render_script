@@ -1,0 +1,74 @@
+local shadow_mapping = require("render.shadow_mapping")
+
+local MSG_CLEAR_COLOR = hash("clear_color")
+local MSG_WINDOW_RESIZED = hash("window_resized")
+local MSG_SET_LIGHTING = hash("set_day_lighting")
+
+local function select_display_camera(shadows)
+	local cameras = camera.get_cameras()
+	for index = #cameras, 1, -1 do
+		local camera_url = cameras[index]
+		if camera_url ~= shadows.camera and camera.get_enabled(camera_url) then
+			render.set_camera(camera_url, { use_frustum = true })
+			return true
+		end
+	end
+	return false
+end
+
+function init(self)
+	self.casters = render.predicate({ "shadow_caster" })
+	self.ground = render.predicate({ "ground_receiver" })
+	self.receivers = render.predicate({ "shadow_receiver" })
+	self.shadows = shadow_mapping.init("prototype_shadow_map")
+	self.clear_buffers = {
+		[graphics.BUFFER_TYPE_COLOR0_BIT] = vmath.vector4(0.32, 0.48, 0.58, 1.0),
+		[graphics.BUFFER_TYPE_DEPTH_BIT] = 1.0,
+		[graphics.BUFFER_TYPE_STENCIL_BIT] = 0,
+	}
+end
+
+function update(self)
+	render.set_depth_mask(true)
+	render.set_stencil_mask(0xff)
+	render.clear(self.clear_buffers)
+
+	shadow_mapping.render_depth(self.shadows, self.casters)
+	select_display_camera(self.shadows)
+	render.set_viewport(0, 0, render.get_window_width(), render.get_window_height())
+	render.set_depth_mask(true)
+	render.set_depth_func(graphics.COMPARE_FUNC_LEQUAL)
+	render.enable_state(graphics.STATE_DEPTH_TEST)
+	render.disable_state(graphics.STATE_CULL_FACE)
+	render.enable_state(graphics.STATE_BLEND)
+	render.set_blend_func(graphics.BLEND_FACTOR_SRC_ALPHA, graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+	-- Fill the opaque ground before alpha-blended cards. Otherwise their
+	-- antialiased edge pixels write depth over the clear colour and produce a
+	-- cyan sky fringe around every transparent silhouette.
+	shadow_mapping.render_receivers(self.shadows, self.ground)
+	shadow_mapping.render_receivers(self.shadows, self.receivers)
+	render.disable_state(graphics.STATE_BLEND)
+	render.disable_state(graphics.STATE_DEPTH_TEST)
+	render.draw_debug3d()
+	render.set_camera()
+end
+
+function final(self)
+	if self.shadows then
+		shadow_mapping.final(self.shadows)
+	end
+end
+
+function on_message(self, message_id, message)
+	if shadow_mapping.on_message(self.shadows, message_id, message) then
+		if message_id == MSG_SET_LIGHTING and message.sky_color then
+			self.clear_buffers[graphics.BUFFER_TYPE_COLOR0_BIT] = message.sky_color
+		end
+		return
+	end
+	if message_id == MSG_CLEAR_COLOR and message.color then
+		self.clear_buffers[graphics.BUFFER_TYPE_COLOR0_BIT] = message.color
+	elseif message_id == MSG_WINDOW_RESIZED then
+		-- Viewport dimensions are read each frame.
+	end
+end

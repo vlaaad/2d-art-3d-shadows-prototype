@@ -1,0 +1,7 @@
+mesh: "/assets/meshes/character_proxy.glb"
+name: "proxy"
+create_go_bones: false
+materials {
+  name: "proxy"
+  material: "/materials/shadow_depth.material"
+}

@@ -1,0 +1,39 @@
+#version 140
+
+in highp vec4 position;
+in mediump vec2 texcoord0;
+in mediump vec3 normal;
+in highp mat4 mtx_world;
+in highp mat4 mtx_normal;
+
+out mediump vec2 var_texcoord0;
+out mediump vec3 var_world_normal;
+out highp vec4 var_shadow_coord;
+out highp vec4 var_shadow_ray;
+out mediump vec3 var_normal_x;
+out mediump vec3 var_normal_y;
+out mediump vec3 var_normal_z;
+
+uniform vs_uniforms
+{
+	highp mat4 mtx_view;
+	highp mat4 mtx_proj;
+	highp mat4 mtx_shadow;
+};
+
+void main()
+{
+	highp vec4 world_position = mtx_world * vec4(position.xyz, 1.0);
+	// Fixed gameplay-camera ray in Defold-local coordinates. Blender bakes
+	// signed distance along the equivalent (0, 10.5, -6.55) ray.
+	highp vec3 local_surface_ray = normalize(vec3(0.0, -6.55, -10.5));
+	highp vec3 world_surface_ray = normalize((mtx_world * vec4(local_surface_ray, 0.0)).xyz);
+	var_texcoord0 = texcoord0;
+	var_world_normal = normalize((mtx_normal * vec4(normal, 0.0)).xyz);
+	var_shadow_coord = mtx_shadow * world_position;
+	var_shadow_ray = mtx_shadow * vec4(world_surface_ray, 0.0);
+	var_normal_x = (mtx_normal * vec4(1.0, 0.0, 0.0, 0.0)).xyz;
+	var_normal_y = (mtx_normal * vec4(0.0, 1.0, 0.0, 0.0)).xyz;
+	var_normal_z = (mtx_normal * vec4(0.0, 0.0, 1.0, 0.0)).xyz;
+	gl_Position = mtx_proj * mtx_view * world_position;
+}

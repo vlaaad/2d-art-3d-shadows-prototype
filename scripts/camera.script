@@ -1,0 +1,7 @@
+function init(self)
+	local eye = go.get_position()
+	local target = vmath.vector3(0.0, 1.25, 0.0)
+	local view = vmath.matrix4_look_at(eye, target, vmath.vector3(0.0, 1.0, 0.0))
+	go.set_rotation(vmath.quat_matrix4(vmath.inv(view)))
+	camera.set_orthographic_mode("#camera", camera.ORTHO_MODE_FIXED)
+end

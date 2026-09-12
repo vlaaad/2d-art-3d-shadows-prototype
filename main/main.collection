@@ -1,2 +1,28 @@
 name: "main"
-scale_along_z: 0
+scale_along_z: 1
+instances {
+  id: "ground"
+  prototype: "/main/ground.go"
+}
+instances {
+  id: "tree"
+  prototype: "/main/tree.go"
+}
+instances {
+  id: "character"
+  prototype: "/main/character.go"
+  position { x: -2.6 y: 0.0 z: 0.35 }
+}
+instances {
+  id: "camera"
+  prototype: "/main/camera.go"
+  position { x: 0.0 y: 7.8 z: 10.5 }
+}
+instances {
+  id: "sun"
+  prototype: "/main/sun.go"
+}
+instances {
+  id: "grass_spawner"
+  prototype: "/main/grass_spawner.go"
+}

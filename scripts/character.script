@@ -1,0 +1,125 @@
+go.property("speed", 2.7)
+
+local TREE_X = 0.0
+local TREE_Z = 0.0
+local COLLISION_RADIUS = 0.92
+local MIN_X, MAX_X = -5.2, 5.2
+local MIN_Z, MAX_Z = -3.6, 3.6
+
+local LEFT = { [hash("key_a")] = true, [hash("key_left")] = true }
+local RIGHT = { [hash("key_d")] = true, [hash("key_right")] = true }
+local UP = { [hash("key_w")] = true, [hash("key_up")] = true }
+local DOWN = { [hash("key_s")] = true, [hash("key_down")] = true }
+
+local function clamp(value, minimum, maximum)
+	return math.max(minimum, math.min(maximum, value))
+end
+
+local function resolve_tree_collision(position)
+	local dx = position.x - TREE_X
+	local dz = position.z - TREE_Z
+	local distance_squared = dx * dx + dz * dz
+	if distance_squared >= COLLISION_RADIUS * COLLISION_RADIUS then
+		return position, false
+	end
+	local distance = math.sqrt(distance_squared)
+	if distance < 0.0001 then
+		dx, dz, distance = -1.0, 0.0, 1.0
+	end
+	position.x = TREE_X + dx / distance * COLLISION_RADIUS
+	position.z = TREE_Z + dz / distance * COLLISION_RADIUS
+	return position, true
+end
+
+local function publish_state(self, blocked)
+	local position = go.get_position()
+	automation_bridge.publish("prototype.player", {
+		x = position.x,
+		z = position.z,
+		moving = self.left or self.right or self.up or self.down,
+		blocked_by_tree = blocked == true,
+	})
+end
+
+local function set_action(self, action_id, active)
+	if LEFT[action_id] then
+		self.left = active
+	elseif RIGHT[action_id] then
+		self.right = active
+	elseif UP[action_id] then
+		self.up = active
+	elseif DOWN[action_id] then
+		self.down = active
+	else
+		return false
+	end
+	return true
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	self.left, self.right, self.up, self.down = false, false, false, false
+	self.publish_elapsed = 1.0
+	automation_bridge.annotate(tostring(msg.url("#art")), {
+		automation_id = "player_art",
+		role = "player",
+	})
+	automation_bridge.annotate(tostring(msg.url("#shadow_proxy")), {
+		automation_id = "player_shadow_proxy",
+		role = "shadow_caster",
+	})
+	automation_bridge.command("prototype.set_player_position", function(data)
+		assert(type(data.x) == "number", "x must be a number")
+		assert(type(data.z) == "number", "z must be a number")
+		local position = vmath.vector3(
+			clamp(data.x, MIN_X, MAX_X),
+			go.get_position().y,
+			clamp(data.z, MIN_Z, MAX_Z)
+		)
+		local blocked
+		position, blocked = resolve_tree_collision(position)
+		go.set_position(position)
+		publish_state(self, blocked)
+		return { x = position.x, z = position.z, blocked_by_tree = blocked }
+	end)
+	automation_bridge.describe("command", "prototype.set_player_position", {
+		description = "Place the player for deterministic depth, collision, and shadow checks.",
+		input_schema = {
+			type = "object",
+			properties = { x = { type = "number" }, z = { type = "number" } },
+			required = { "x", "z" },
+		},
+	})
+	automation_bridge.describe("state", "prototype.player", {
+		description = "Player position, movement state, and trunk collision result.",
+	})
+	publish_state(self, false)
+end
+
+function update(self, dt)
+	local x = (self.right and 1 or 0) - (self.left and 1 or 0)
+	local z = (self.down and 1 or 0) - (self.up and 1 or 0)
+	local blocked = false
+	if x ~= 0 or z ~= 0 then
+		local length = math.sqrt(x * x + z * z)
+		local position = go.get_position()
+		position.x = clamp(position.x + x / length * self.speed * dt, MIN_X, MAX_X)
+		position.z = clamp(position.z + z / length * self.speed * dt, MIN_Z, MAX_Z)
+		position, blocked = resolve_tree_collision(position)
+		go.set_position(position)
+	end
+
+	self.publish_elapsed = self.publish_elapsed + dt
+	if self.publish_elapsed >= 0.1 then
+		self.publish_elapsed = self.publish_elapsed - 0.1
+		publish_state(self, blocked)
+	end
+end
+
+function on_input(self, action_id, action)
+	if action.pressed then
+		set_action(self, action_id, true)
+	elseif action.released then
+		set_action(self, action_id, false)
+	end
+end
