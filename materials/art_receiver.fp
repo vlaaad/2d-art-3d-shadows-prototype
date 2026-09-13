@@ -51,9 +51,11 @@ void main()
 		local_normal.z * var_normal_z);
 
 	vec3 direction_to_light = -normalize(sun_direction.xyz);
-	float n_dot_l = max(dot(receiver_normal, direction_to_light), 0.0);
+	// Match the ground's day/night illumination without adding proxy form
+	// shading to the painted art. A fixed brightness made grass glow at night.
+	float n_dot_l = max(direction_to_light.y, 0.0);
 	float wrapped_diffuse = 0.72 + 0.28 * n_dot_l;
-	float illumination = 1.0;
+	float illumination = lighting.x + lighting.y * wrapped_diffuse;
 	// Explicit card-plane texels still use the same world-space shadow lookup,
 	// preserving shadows that cross between different objects.
 	float visibility = directional_shadow_visibility(

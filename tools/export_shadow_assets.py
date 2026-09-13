@@ -1,20 +1,22 @@
-"""Validate and export one authored proxy/card pair from any Blender file.
+"""Validate, export, and bake an authored proxy/card pair together.
 
-This script deliberately contains no geometry construction or asset names.
-After validating the live mesh, run:
-
-    blender --background --python tools/export_shadow_assets.py -- \
-      --blend <asset.blend> --proxy <object> --proxy-output <proxy.glb> \
-      --expected-shells <count> --card <object> --card-output <card.glb>
+No geometry is constructed and the source blend/art are never saved or edited.
+The CLI requires all three outputs so exporting cannot leave an old receiver map.
+Use --quality fast for the edit loop; review also renders volume/side shadows.
+See README.md for complete asset commands.
 """
 
 from pathlib import Path
 import argparse
 import json
 import sys
+import tempfile
+import shutil
 
 import bpy
 import bmesh
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,8 +34,13 @@ def script_arguments():
     parser.add_argument("--proxy", required=True)
     parser.add_argument("--proxy-output", required=True)
     parser.add_argument("--expected-shells", type=int, default=1)
-    parser.add_argument("--card")
-    parser.add_argument("--card-output")
+    parser.add_argument("--card", required=True)
+    parser.add_argument("--card-output", required=True)
+    parser.add_argument("--surface-output", required=True, help="Validate, export, and bake together")
+    parser.add_argument("--art", required=True, help="Source PNG for coverage validation")
+    parser.add_argument("--pixels-x", type=int, required=True)
+    parser.add_argument("--pixels-y", type=int, required=True)
+    parser.add_argument("--quality", choices=("fast", "review"), default="review")
     return parser.parse_args(values)
 
 
@@ -131,16 +138,59 @@ def export_asset(proxy: str, proxy_output: str, expected_shells: int = 1,
     return result
 
 
+def export_and_bake(proxy, proxy_output, card, card_output, art, surface_output,
+                    pixels_x, pixels_y, expected_shells=1, quality="review"):
+    """Stage the full pipeline; publish outputs only when validation/baking pass.
+
+    Coverage is checked on the live objects. The bake consumes the staged GLBs,
+    so the receiver plane, pivot, normals, and proxy always match the export.
+    """
+    from render_proxy_validation import validate_asset
+    from bake_proxy_surface_maps import bake_surface_map
+    if not all((card, card_output, art, pixels_x, pixels_y)):
+        raise ValueError("Baking requires --card, --card-output, --art, --pixels-x and --pixels-y")
+    destinations = [project_path(p).resolve() for p in (proxy_output, card_output, surface_output)]
+    sources = {Path(bpy.data.filepath).resolve(), project_path(art).resolve()}
+    if len(set(destinations)) != 3 or sources.intersection(destinations):
+        raise ValueError("Output files must be distinct and must not overwrite source art or blend files")
+    if [p.suffix.lower() for p in destinations] != ['.glb', '.glb', '.png']:
+        raise ValueError("Outputs must be proxy.glb, card.glb and surface.png")
+    obj = bpy.data.objects[card]
+    # Hidden source objects may not have evaluated world matrices yet.
+    old_visibility = (obj.hide_viewport, obj.hide_get())
+    try:
+        obj.hide_viewport = False
+        obj.hide_set(False)
+        bpy.context.view_layer.update()
+        points = [obj.matrix_world @ v.co for v in obj.data.vertices]
+        width = max(p.x for p in points) - min(p.x for p in points)
+        height = max(p.z for p in points) - min(p.z for p in points)
+        validation = validate_asset(proxy, art, card, width, height,
+                                    expected_shells=expected_shells, quality=quality)
+    finally:
+        obj.hide_viewport, hidden = old_visibility
+        obj.hide_set(hidden)
+    if not validation['passed']:
+        raise ValueError("Asset validation failed: " + "; ".join(validation['failures'])
+                         + ". Review: " + validation['output_directory'])
+    with tempfile.TemporaryDirectory(prefix="shadow-asset-export-") as temporary:
+        staging = Path(temporary)
+        proxy_path, card_path, surface_path = [staging / name for name in ('proxy.glb', 'card.glb', 'surface.png')]
+        export_asset(proxy, str(proxy_path), expected_shells, card, str(card_path))
+        bake = bake_surface_map(proxy_path, card_path, surface_path, pixels_x, pixels_y)
+        for source, destination in zip((proxy_path, card_path, surface_path), destinations):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+    bake.update(proxy_glb=str(destinations[0]), card_glb=str(destinations[1]), output=str(destinations[2]))
+    return dict(validation=validation, bake=bake)
+
+
 if __name__ == "__main__":
     args = script_arguments()
     blend = project_path(args.blend)
     if Path(bpy.data.filepath) != blend:
         bpy.ops.wm.open_mainfile(filepath=str(blend))
-    result = export_asset(
-        proxy=args.proxy,
-        proxy_output=args.proxy_output,
-        expected_shells=args.expected_shells,
-        card=args.card,
-        card_output=args.card_output,
-    )
+    result = export_and_bake(
+        args.proxy, args.proxy_output, args.card, args.card_output, args.art,
+        args.surface_output, args.pixels_x, args.pixels_y, args.expected_shells, args.quality)
     print("SHADOW_ASSET_EXPORT_RESULT=" + json.dumps(result, sort_keys=True))

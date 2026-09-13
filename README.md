@@ -21,29 +21,53 @@ in front of or behind the tree. The field contains 500 factory-spawned grass
 cards and 500 matching shadow proxies; shared resources and local-space model
 materials allow Defold to instance/batch both passes.
 
-`assets/proxies/shadow_proxies.blend` is the canonical authored source for the
-art-card pivots and the editable 3D proxies. The PNG artwork remains unchanged.
-Edit the named solids in Blender against their reference cards, validate them,
-then export with `blender --background --python tools/export_shadow_assets.py`.
-The export script contains no geometry construction.
-
-To rebake the tree receiver map after validating its proxy, use the card's
-world-space plane and bottom edge (its object origin has a separate Y offset):
+Author the proxy and its final runtime art-card transform in the asset's `.blend`
+file. Run validation, export, and receiver baking as one operation:
 
 ```sh
-blender --background --python tools/bake_proxy_surface_maps.py -- \
-  --blend assets/proxies/shadow_proxies.blend --proxy tree_proxy \
-  --output assets/textures/tree_surface.png --pixels-x 512 --pixels-y 512 \
-  --card-width 3.7 --card-height 4.2 --card-y 0.0 --pivot-z -0.065625
+blender --background -noaudio --python-exit-code 1 --python tools/export_shadow_assets.py -- \
+  --blend assets/proxies/shadow_proxies.blend --proxy tree_proxy --card tree_card \
+  --art assets/textures/tree.png --expected-shells 2 \
+  --proxy-output assets/meshes/tree_proxy.glb --card-output assets/meshes/tree_card.glb \
+  --surface-output assets/textures/tree_surface.png --pixels-x 512 --pixels-y 512
 ```
 
-The boulder likewise uses the exported card plane at world Y = 0.0:
+For the boulder:
 
 ```sh
-blender --background --python tools/bake_proxy_surface_maps.py -- \
-  --blend assets/proxies/boulder.blend --proxy boulder_proxy \
-  --output assets/textures/boulder_surface.png --pixels-x 256 --pixels-y 171 \
-  --card-width 2.6 --card-height 1.73671875 --card-y 0.0 --pivot-z -0.17265625
+blender --background -noaudio --python-exit-code 1 --python tools/export_shadow_assets.py -- \
+  --blend assets/proxies/boulder.blend --proxy boulder_proxy --card boulder_card \
+  --art assets/textures/boulder.png \
+  --proxy-output assets/meshes/boulder_proxy.glb --card-output assets/meshes/boulder_card.glb \
+  --surface-output assets/textures/boulder_surface.png --pixels-x 256 --pixels-y 171
 ```
 
----
+The command validates the authored proxy against the supplied PNG, requiring
+90% overall / 95% contact coverage and the requested number of watertight shells.
+It then exports into a temporary directory and bakes from those exact GLBs,
+including their node transforms and UVs. Card dimensions, plane, and pivot are
+automatic: never substitute an object's location for its world-space vertices.
+Invalid UV layouts, missing receiver hits, or depths outside the shader's encoding
+range fail before the output assets are replaced. Source artwork and `.blend`
+files remain unchanged. All three output paths are required to avoid stale maps.
+
+The default `review` quality produces volume and side-shadow images; inspect the
+reported review directory. Use `--quality fast` for the coverage/contact edit loop.
+Occasionally compare the result with Defold's F2 proxy overlay. The current shader
+and baker assume upright cards and the fixed gameplay camera; camera or shader
+depth-range changes must be coordinated with the baker.
+
+To rebake already exported geometry without reauthoring it:
+
+```sh
+blender --background -noaudio --python-exit-code 1 --python tools/bake_proxy_surface_maps.py -- \
+  --proxy-glb assets/meshes/tree_proxy.glb --card-glb assets/meshes/tree_card.glb \
+  --output assets/textures/tree_surface.png --pixels-x 512 --pixels-y 512
+```
+
+Regression checks cover the verified tree/boulder maps, parent transforms, invalid
+UVs, and preservation of an existing map when baking fails:
+
+```sh
+blender --background -noaudio --python-exit-code 1 --python tools/test_shadow_baking.py
+```

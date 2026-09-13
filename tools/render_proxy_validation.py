@@ -31,7 +31,7 @@ DEFAULT_BLEND = ROOT / "assets" / "proxies" / "shadow_proxies.blend"
 OUT = None
 LAYOUT_RESOLUTION = 384
 PREVIEW_RESOLUTION = 320
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 CACHE = Path(tempfile.gettempdir()) / "defold-proxy-validation-cache"
 
 
@@ -302,9 +302,8 @@ def render_game_layout(proxy_name, reference_name, width, height, stem):
         camera.hide_render = False
         ensure_area_light()
         reference.hide_render = False
-        # Authored reference geometry is parked 0.64 units behind the edit mesh;
-        # this temporary object translation puts its card plane at runtime depth 0.
-        reference.location.y = -0.64
+        # Validate the actual authored transform that will be exported. Moving
+        # the reference here would hide card/bake alignment mistakes.
         render.filepath = str(art_path)
         bpy.ops.render.render(write_still=True)
         shutil.copyfile(art_path, cached_art)
@@ -578,7 +577,24 @@ def validate_asset(proxy, art, reference, width, height, stem=None, light_span=N
     scene.eevee.taa_render_samples = 1 if quality == "fast" else 4
     old_hidden = {obj.name: obj.hide_render for obj in scene.objects}
     reference_object = authored_reference(reference)
-    old_reference_location = reference_object.location.copy()
+    # Export cards may intentionally have an untextured material slot. Bind the
+    # supplied source art for validation instead of measuring an opaque quad.
+    old_materials = list(reference_object.data.materials)
+    material = bpy.data.materials.new("VALIDATION_SOURCE_ART")
+    material.use_nodes = True
+    texture = material.node_tree.nodes.new("ShaderNodeTexImage")
+    texture.image = bpy.data.images.load(str(art_path), check_existing=True)
+    shader = material.node_tree.nodes.get("Principled BSDF")
+    material.node_tree.links.new(texture.outputs["Color"], shader.inputs["Base Color"])
+    material.node_tree.links.new(texture.outputs["Alpha"], shader.inputs["Alpha"])
+    reference_object.data.materials.clear()
+    reference_object.data.materials.append(material)
+    visibility = [(obj, obj.hide_viewport, obj.hide_get()) for obj in
+                  (reference_object, proxy_object(proxy))]
+    for obj, _disabled, _hidden in visibility:
+        obj.hide_viewport = False
+        obj.hide_set(False)
+    bpy.context.view_layer.update()
     try:
         metrics = render_game_layout(proxy, reference, width, height, stem)
         checks = ["game_layout_coverage", "ground_contact"]
@@ -588,7 +604,13 @@ def validate_asset(proxy, art, reference, width, height, stem=None, light_span=N
             render_shadow_preview(proxy, reference, stem, width, height, light_span)
             checks.extend(("volume", "left_shadow", "right_shadow"))
     finally:
-        reference_object.location = old_reference_location
+        reference_object.data.materials.clear()
+        for old_material in old_materials:
+            reference_object.data.materials.append(old_material)
+        bpy.data.materials.remove(material)
+        for obj, disabled, hidden in visibility:
+            obj.hide_viewport = disabled
+            obj.hide_set(hidden)
         scene.camera = old_camera
         scene.world.color = old_world_color
         scene.eevee.taa_render_samples = old_render_samples
