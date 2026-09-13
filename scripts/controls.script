@@ -1,0 +1,148 @@
+local layout = require "scripts.control_layout"
+local diagnostics = require "scripts.diagnostics"
+
+local MOUSE = hash("mouse_button_left")
+local TOUCH = hash("touch_multi")
+local TRAVEL = 48
+local DEAD_ZONE = 0.12
+local IDS = { stick = "/control_stick", thumb = "/control_thumb", cycle = "/control_cycle" }
+
+local function publish(self)
+	diagnostics.publish("prototype.controls", {
+		x = self.axis_x, z = self.axis_z,
+		stick_active = self.stick_pointer ~= nil,
+		cycle_pressed = self.cycle_pointer ~= nil,
+		paused = self.paused,
+		-- Window-space targets for tests; top-left origin matches bridge input.
+		stick = { x = self.cx * self.scale, y = self.height - self.cy * self.scale, radius = 80 * self.scale },
+		cycle = { x = self.bx * self.scale, y = self.height - self.by * self.scale, radius = 40 * self.scale },
+	})
+end
+
+local function move(self, dx, dy)
+	local length = math.sqrt(dx * dx + dy * dy)
+	local extent = math.min(length / TRAVEL, 1)
+	local nx, ny = 0, 0
+	if length > 0 then nx, ny = dx / length, dy / length end
+	go.set_position(vmath.vector3(self.cx + nx * extent * TRAVEL, self.cy + ny * extent * TRAVEL, self.thumb_z), IDS.thumb)
+	local amount = math.max(0, (extent - DEAD_ZONE) / (1 - DEAD_ZONE))
+	self.axis_x, self.axis_z = nx * amount, -ny * amount
+	msg.post("/character#controller", "virtual_move", { x = self.axis_x, z = self.axis_z })
+	publish(self)
+end
+
+local function button_feedback(pressed)
+	go.set("/control_cycle#sprite", "tint", pressed and vmath.vector4(0.75, 0.83, 0.78, 1) or vmath.vector4(1))
+end
+
+local function cancel(self)
+	self.stick_pointer, self.cycle_pointer = nil, nil
+	button_feedback(false)
+	move(self, 0, 0)
+end
+
+local function resize(self)
+	local width, height = window.get_size()
+	if width <= 0 or height <= 0 or (width == self.width and height == self.height) then return end
+	self.width, self.height = width, height
+	local rects
+	rects, self.scale = layout.apply(width, height, window.get_display_scale())
+	for name, rect in pairs(rects) do
+		go.set_position(vmath.vector3(rect.x + rect.w / 2, rect.y + rect.h / 2, rect.z), IDS[name])
+	end
+	self.cx, self.cy = rects.stick.x + 80, rects.stick.y + 80
+	self.bx, self.by = rects.cycle.x + 40, rects.cycle.y + 40
+	self.thumb_z = rects.thumb.z
+	cancel(self)
+end
+
+local function inside(x, y, cx, cy, radius)
+	return (x - cx) ^ 2 + (y - cy) ^ 2 <= radius ^ 2
+end
+
+local function pointer(self, id, action)
+	if not action.screen_x or not action.screen_y then return false end
+	local x, y = action.screen_x / self.scale, action.screen_y / self.scale
+	if action.pressed then
+		if not self.stick_pointer and inside(x, y, self.cx, self.cy, 80) then
+			self.stick_pointer = id
+		elseif not self.cycle_pointer and inside(x, y, self.bx, self.by, 40) then
+			self.cycle_pointer = id
+		end
+	end
+	if self.stick_pointer == id then
+		if action.released then
+			self.stick_pointer = nil
+			move(self, 0, 0)
+		else
+			move(self, x - self.cx, y - self.cy)
+		end
+		return true
+	elseif self.cycle_pointer == id then
+		local over = inside(x, y, self.bx, self.by, 40)
+		button_feedback(over and not action.released)
+		if action.released then
+			self.cycle_pointer = nil
+			if over then msg.post("/sun#cycle", "toggle_cycle") end
+		end
+		publish(self)
+		return true
+	end
+	return false
+end
+
+function init(self)
+	self.axis_x, self.axis_z = 0, 0
+	self.paused = false
+	self.touch_cooldown = 0
+	resize(self)
+	msg.post(".", "acquire_input_focus")
+	msg.post("/sun#cycle", "subscribe_cycle")
+	window.set_listener(function(_, event)
+		if event == window.WINDOW_EVENT_FOCUS_LOST then
+			cancel(self)
+			msg.post("/character#controller", "reset_input")
+		end
+	end)
+	diagnostics.annotate("main:/control_stick#sprite", { automation_id = "movement_stick", role = "joystick" })
+	diagnostics.annotate("main:/control_thumb#sprite", { automation_id = "movement_thumb", role = "joystick_thumb" })
+	diagnostics.annotate("main:/control_cycle#sprite", { automation_id = "cycle_toggle", role = "button" })
+	diagnostics.describe("state", "prototype.controls", { description = "Virtual movement axes, button state, and window-space control centers." })
+end
+
+function update(self, dt)
+	self.touch_cooldown = math.max(0, self.touch_cooldown - dt)
+	resize(self)
+end
+
+function on_message(self, message_id, message)
+	if message_id == hash("cycle_state") then
+		self.paused = message.paused
+		sprite.play_flipbook("/control_cycle#sprite", self.paused and "cycle_play" or "cycle_pause")
+		publish(self)
+	end
+end
+
+function on_input(self, action_id, action)
+	if action_id == TOUCH then
+		-- Ignore the single-touch mouse events synthesized by mobile platforms.
+		-- Transfer a first-frame mouse capture to the real finger before release.
+		if self.stick_pointer == "mouse" or self.cycle_pointer == "mouse" then cancel(self) end
+		self.touch_cooldown = 0.5
+		local consumed = false
+		for _, touch in ipairs(action.touch or {}) do
+			consumed = pointer(self, touch.id, touch) or consumed
+		end
+		return consumed
+	elseif self.touch_cooldown == 0 and (action_id == MOUSE or action_id == nil) then
+		return pointer(self, "mouse", action)
+	end
+	return false
+end
+
+function final(self)
+	window.set_listener(nil)
+	msg.post("/character#controller", "virtual_move", { x = 0, z = 0 })
+	msg.post("/sun#cycle", "unsubscribe_cycle")
+	msg.post(".", "release_input_focus")
+end

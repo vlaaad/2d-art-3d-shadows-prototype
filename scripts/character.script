@@ -21,7 +21,7 @@ local function publish_state(self)
 		z = position.z,
 		vx = velocity.x,
 		vz = velocity.z,
-		moving = self.left or self.right or self.up or self.down or self.test_drive_enabled,
+		moving = self.left or self.right or self.up or self.down or self.virtual_x ~= 0 or self.virtual_z ~= 0 or self.test_drive_enabled,
 		test_drive_enabled = self.test_drive_enabled,
 		blocked = self.blocked == true,
 		blocked_by_tree = self.blocked_by_tree == true,
@@ -48,6 +48,7 @@ end
 function init(self)
 	msg.post(".", "acquire_input_focus")
 	self.left, self.right, self.up, self.down = false, false, false, false
+	self.virtual_x, self.virtual_z = 0, 0
 	self.physics_object = bullet3d.get_collision_object("#collision")
 	self.physics_body = bullet3d.get_rigid_body("#collision")
 	assert(self.physics_object and self.physics_body, "player requires a dynamic 3D collision object")
@@ -77,6 +78,7 @@ function init(self)
 		-- Deterministic test placement also clears any key whose release was lost
 		-- when a previous engine/window was stopped while input was held.
 		self.left, self.right, self.up, self.down = false, false, false, false
+		self.virtual_x, self.virtual_z = 0, 0
 		self.test_drive_enabled = false
 		self.test_drive_remaining = 0.0
 		local position = vmath.vector3(
@@ -158,11 +160,12 @@ function fixed_update(self, dt)
 			self.test_drive_z = 0.0
 		end
 	end
-	local x = self.test_drive_enabled and self.test_drive_x or ((self.right and 1 or 0) - (self.left and 1 or 0))
-	local z = self.test_drive_enabled and self.test_drive_z or ((self.down and 1 or 0) - (self.up and 1 or 0))
+	local x = self.test_drive_enabled and self.test_drive_x or ((self.right and 1 or 0) - (self.left and 1 or 0) + self.virtual_x)
+	local z = self.test_drive_enabled and self.test_drive_z or ((self.down and 1 or 0) - (self.up and 1 or 0) + self.virtual_z)
 	local desired_velocity = vmath.vector3()
 	if x ~= 0 or z ~= 0 then
-		local length = math.sqrt(x * x + z * z)
+		-- Keep analog magnitude while capping diagonals and combined inputs.
+		local length = math.max(1, math.sqrt(x * x + z * z))
 		desired_velocity.x = x / length * self.speed
 		desired_velocity.z = z / length * self.speed
 		bullet3d.collision_object.activate(self.physics_object, true)
@@ -181,6 +184,14 @@ function fixed_update(self, dt)
 end
 
 function on_message(self, message_id, message)
+	if message_id == hash("virtual_move") then
+		self.virtual_x, self.virtual_z = message.x, message.z
+		return
+	elseif message_id == hash("reset_input") then
+		self.left, self.right, self.up, self.down = false, false, false, false
+		self.virtual_x, self.virtual_z = 0, 0
+		return
+	end
 	if message_id ~= hash("contact_point_response") or message.other_group ~= WORLD_GROUP then
 		return
 	end

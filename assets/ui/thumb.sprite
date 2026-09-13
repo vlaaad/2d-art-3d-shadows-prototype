@@ -1,0 +1,7 @@
+default_animation: "stick_thumb"
+material: "/materials/controls.material"
+blend_mode: BLEND_MODE_ALPHA
+textures {
+  sampler: "texture_sampler"
+  texture: "/assets/ui/controls.atlas"
+}

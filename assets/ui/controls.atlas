@@ -1,0 +1,7 @@
+images { image: "/assets/ui/stick_base.png" }
+images { image: "/assets/ui/stick_thumb.png" }
+images { image: "/assets/ui/cycle_play.png" }
+images { image: "/assets/ui/cycle_pause.png" }
+margin: 0
+extrude_borders: 2
+inner_padding: 0

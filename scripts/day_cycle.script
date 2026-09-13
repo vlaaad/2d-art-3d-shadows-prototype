@@ -60,6 +60,10 @@ local function mix_color(a, b, t)
 end
 
 local function publish_state(self, daylight)
+	if self.controls and self.published_paused ~= self.paused then
+		msg.post(self.controls, "cycle_state", { paused = self.paused })
+		self.published_paused = self.paused
+	end
 	automation_bridge.publish("prototype.day_cycle", {
 		phase = self.phase,
 		cycle_seconds = self.cycle_seconds,
@@ -179,6 +183,19 @@ function update(self, dt)
 	if self.publish_elapsed >= 0.1 then
 		self.publish_elapsed = self.publish_elapsed - 0.1
 		publish_state(self, daylight)
+	end
+end
+
+function on_message(self, message_id, message, sender)
+	if message_id == hash("subscribe_cycle") then
+		self.controls = sender
+		self.published_paused = nil
+		publish_state(self, apply_cycle(self))
+	elseif message_id == hash("unsubscribe_cycle") and self.controls == sender then
+		self.controls = nil
+	elseif message_id == hash("toggle_cycle") then
+		self.paused = not self.paused
+		publish_state(self, apply_cycle(self))
 	end
 end
 

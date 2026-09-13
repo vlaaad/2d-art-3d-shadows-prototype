@@ -42,3 +42,19 @@ instances {
   id: "grass_spawner"
   prototype: "/main/grass_spawner.go"
 }
+instances {
+  id: "controls"
+  prototype: "/main/controls.go"
+}
+instances {
+  id: "control_stick"
+  prototype: "/main/control_stick.go"
+}
+instances {
+  id: "control_thumb"
+  prototype: "/main/control_thumb.go"
+}
+instances {
+  id: "control_cycle"
+  prototype: "/main/control_cycle.go"
+}
