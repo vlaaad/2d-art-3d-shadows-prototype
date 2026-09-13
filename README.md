@@ -27,4 +27,23 @@ Edit the named solids in Blender against their reference cards, validate them,
 then export with `blender --background --python tools/export_shadow_assets.py`.
 The export script contains no geometry construction.
 
+To rebake the tree receiver map after validating its proxy, use the card's
+world-space plane and bottom edge (its object origin has a separate Y offset):
+
+```sh
+blender --background --python tools/bake_proxy_surface_maps.py -- \
+  --blend assets/proxies/shadow_proxies.blend --proxy tree_proxy \
+  --output assets/textures/tree_surface.png --pixels-x 512 --pixels-y 512 \
+  --card-width 3.7 --card-height 4.2 --card-y 0.0 --pivot-z -0.065625
+```
+
+The boulder likewise uses the exported card plane at world Y = 0.0:
+
+```sh
+blender --background --python tools/bake_proxy_surface_maps.py -- \
+  --blend assets/proxies/boulder.blend --proxy boulder_proxy \
+  --output assets/textures/boulder_surface.png --pixels-x 256 --pixels-y 171 \
+  --card-width 2.6 --card-height 1.73671875 --card-y 0.0 --pivot-z -0.17265625
+```
+
 ---

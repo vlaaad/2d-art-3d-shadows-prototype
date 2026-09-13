@@ -8,7 +8,12 @@ immutable and the proxy remains Blender-authored. Run:
     blender --background --python tools/bake_proxy_surface_maps.py -- \
       --blend <asset.blend> --proxy <object> --output <surface.png> \
       --pixels-x 256 --pixels-y 256 --card-width 1.0 --card-height 1.0 \
-      --card-y -0.64 --pivot-z 0.0
+      --card-y 0.0 --pivot-z 0.0
+
+Card dimensions, ``--card-y``, and ``--pivot-z`` describe the world-space
+mesh vertices, not the card object's origin. For example, ``tree_card`` has
+an object Y offset of -0.64 but its vertices lie on world Y = 0.0. Using the
+object offset shifts receiver hits away from the artwork and creates a seam.
 
 ``bake_surface_map()`` can also be called directly against a live object in the
 persistent Blender instance, avoiding an export/reload cycle while iterating.

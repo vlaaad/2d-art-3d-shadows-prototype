@@ -53,7 +53,7 @@ void main()
 	vec3 direction_to_light = -normalize(sun_direction.xyz);
 	float n_dot_l = max(dot(receiver_normal, direction_to_light), 0.0);
 	float wrapped_diffuse = 0.72 + 0.28 * n_dot_l;
-	float illumination = lighting.x + lighting.y * wrapped_diffuse;
+	float illumination = 1.0;
 	// Explicit card-plane texels still use the same world-space shadow lookup,
 	// preserving shadows that cross between different objects.
 	float visibility = directional_shadow_visibility(
