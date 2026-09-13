@@ -85,3 +85,8 @@ PYTHONPATH=automation-bridge-python python3 tools/test_player_collisions.py
 These push into the barrel, trunk, boulder, and fence, check for entry into the
 barrel/trunk interiors, and require movement away when the input reverses.
 The game remains open with the player returned to the starting position.
+
+Gameplay scripts access Automation Bridge through `scripts/diagnostics.lua`.
+The native API is debug-only, so this adapter makes diagnostic hooks no-ops in
+release builds. Keep new diagnostic calls behind the adapter so they cannot
+interrupt gameplay when bundling HTML5 or native releases.

@@ -1,5 +1,7 @@
 go.property("cycle_seconds", 10.0)
 
+local automation_bridge = require "scripts.diagnostics"
+
 local TAU = math.pi * 2.0
 local ACTION_PAUSE = hash("key_space")
 local ACTION_RESET = hash("key_r")

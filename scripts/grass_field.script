@@ -1,5 +1,7 @@
 go.property("count", 500)
 
+local automation_bridge = require "scripts.diagnostics"
+
 local UINT32 = 4294967296
 
 local function random01(self)

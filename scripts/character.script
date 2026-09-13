@@ -1,5 +1,7 @@
 go.property("speed", 2.7)
 
+local automation_bridge = require "scripts.diagnostics"
+
 local WORLD_GROUP = hash("world")
 local TREE_ID = hash("/tree")
 local VELOCITY_GAIN = 18.0
