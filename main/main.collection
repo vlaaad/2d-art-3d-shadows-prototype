@@ -14,6 +14,22 @@ instances {
   position { x: -2.6 y: 0.0 z: 0.35 }
 }
 instances {
+  id: "barrel"
+  prototype: "/main/barrel.go"
+  position { x: -3.65 y: 0.0 z: 2.0 }
+}
+instances {
+  id: "boulder"
+  prototype: "/main/boulder.go"
+  position { x: 3.6 y: 0.0 z: -1.65 }
+}
+instances {
+  id: "fence"
+  prototype: "/main/fence.go"
+  position { x: 2.85 y: 0.0 z: 2.55 }
+  scale3 { x: 0.72 y: 0.72 z: 0.72 }
+}
+instances {
   id: "camera"
   prototype: "/main/camera.go"
   position { x: 0.0 y: 7.8 z: 10.5 }

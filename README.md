@@ -3,14 +3,20 @@
 A Defold 2.5D lighting experiment: transparent hand-painted model cards share a
 single receiver material, while matching shallow low-poly models render only to
 a directional shadow map. The sun orbits through a ten-second day/night cycle.
+This branch requires Defold 1.13.2 beta or newer because prop collision objects
+use the new glTF-backed `TYPE_MESH` shape.
 
 Controls:
 
 - WASD or arrow keys: move
 - Space: pause/resume the day/night cycle
 - R: reset time of day
+- F2: show/hide translucent shadow proxies
+- F3: show/hide Defold 3D physics colliders
+- Backquote/tilde: toggle the profiler
 
-The trunk has a circular movement blocker. Depth testing lets the character walk
+The character uses a kinematic 3D capsule. The tree, barrel, boulder, and fence
+use their complete authored shadow proxies as static collision meshes. Depth testing lets the character walk
 in front of or behind the tree. The field contains 500 factory-spawned grass
 cards and 500 matching shadow proxies; shared resources and local-space model
 materials allow Defold to instance/batch both passes.

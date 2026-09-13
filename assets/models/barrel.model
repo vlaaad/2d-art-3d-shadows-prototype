@@ -1,0 +1,15 @@
+mesh: "/assets/meshes/barrel_card.glb"
+name: "art"
+create_go_bones: false
+materials {
+  name: "art"
+  material: "/materials/art_receiver.material"
+  textures {
+    sampler: "tex0"
+    texture: "/assets/textures/barrel.png"
+  }
+  textures {
+    sampler: "surface_map"
+    texture: "/assets/textures/barrel_surface.png"
+  }
+}

@@ -3,6 +3,7 @@ local shadow_mapping = require("render.shadow_mapping")
 local MSG_CLEAR_COLOR = hash("clear_color")
 local MSG_WINDOW_RESIZED = hash("window_resized")
 local MSG_SET_LIGHTING = hash("set_day_lighting")
+local MSG_TOGGLE_PROXY_DEBUG = hash("toggle_proxy_debug")
 
 local function select_display_camera(shadows)
 	local cameras = camera.get_cameras()
@@ -21,6 +22,7 @@ function init(self)
 	self.ground = render.predicate({ "ground_receiver" })
 	self.receivers = render.predicate({ "shadow_receiver" })
 	self.shadows = shadow_mapping.init("prototype_shadow_map")
+	self.debug_proxies = false
 	self.clear_buffers = {
 		[graphics.BUFFER_TYPE_COLOR0_BIT] = vmath.vector4(0.32, 0.48, 0.58, 1.0),
 		[graphics.BUFFER_TYPE_DEPTH_BIT] = 1.0,
@@ -47,6 +49,14 @@ function update(self)
 	-- cyan sky fringe around every transparent silhouette.
 	shadow_mapping.render_receivers(self.shadows, self.ground)
 	shadow_mapping.render_receivers(self.shadows, self.receivers)
+	if self.debug_proxies then
+		-- Draw the exact meshes used by the depth pass over their cards. Depth is
+		-- disabled so hidden/internal and misaligned volumes remain visible.
+		render.disable_state(graphics.STATE_DEPTH_TEST)
+		render.enable_material("debug_proxy")
+		render.draw(self.casters)
+		render.disable_material()
+	end
 	render.disable_state(graphics.STATE_BLEND)
 	render.disable_state(graphics.STATE_DEPTH_TEST)
 	render.draw_debug3d()
@@ -68,6 +78,12 @@ function on_message(self, message_id, message)
 	end
 	if message_id == MSG_CLEAR_COLOR and message.color then
 		self.clear_buffers[graphics.BUFFER_TYPE_COLOR0_BIT] = message.color
+	elseif message_id == MSG_TOGGLE_PROXY_DEBUG then
+		if message.enabled == nil then
+			self.debug_proxies = not self.debug_proxies
+		else
+			self.debug_proxies = message.enabled == true
+		end
 	elseif message_id == MSG_WINDOW_RESIZED then
 		-- Viewport dimensions are read each frame.
 	end

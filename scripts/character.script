@@ -1,43 +1,29 @@
 go.property("speed", 2.7)
 
-local TREE_X = 0.0
-local TREE_Z = 0.0
-local COLLISION_RADIUS = 0.92
-local MIN_X, MAX_X = -5.2, 5.2
-local MIN_Z, MAX_Z = -3.6, 3.6
+local WORLD_GROUP = hash("world")
+local TREE_ID = hash("/tree")
+local VELOCITY_GAIN = 18.0
+local MAX_DRIVE_FORCE = 70.0
 
 local LEFT = { [hash("key_a")] = true, [hash("key_left")] = true }
 local RIGHT = { [hash("key_d")] = true, [hash("key_right")] = true }
 local UP = { [hash("key_w")] = true, [hash("key_up")] = true }
 local DOWN = { [hash("key_s")] = true, [hash("key_down")] = true }
 
-local function clamp(value, minimum, maximum)
-	return math.max(minimum, math.min(maximum, value))
-end
-
-local function resolve_tree_collision(position)
-	local dx = position.x - TREE_X
-	local dz = position.z - TREE_Z
-	local distance_squared = dx * dx + dz * dz
-	if distance_squared >= COLLISION_RADIUS * COLLISION_RADIUS then
-		return position, false
-	end
-	local distance = math.sqrt(distance_squared)
-	if distance < 0.0001 then
-		dx, dz, distance = -1.0, 0.0, 1.0
-	end
-	position.x = TREE_X + dx / distance * COLLISION_RADIUS
-	position.z = TREE_Z + dz / distance * COLLISION_RADIUS
-	return position, true
-end
-
-local function publish_state(self, blocked)
+local function publish_state(self)
 	local position = go.get_position()
+	local velocity = bullet3d.rigid_body.get_linear_velocity(self.physics_body)
 	automation_bridge.publish("prototype.player", {
 		x = position.x,
+		y = position.y,
 		z = position.z,
+		vx = velocity.x,
+		vz = velocity.z,
 		moving = self.left or self.right or self.up or self.down,
-		blocked_by_tree = blocked == true,
+		blocked = self.blocked == true,
+		blocked_by_tree = self.blocked_by_tree == true,
+		blocked_by = self.blocked_by,
+		contact_count = self.contact_count,
 	})
 end
 
@@ -59,6 +45,20 @@ end
 function init(self)
 	msg.post(".", "acquire_input_focus")
 	self.left, self.right, self.up, self.down = false, false, false, false
+	self.physics_object = bullet3d.get_collision_object("#collision")
+	self.physics_body = bullet3d.get_rigid_body("#collision")
+	assert(self.physics_object and self.physics_body, "player requires a dynamic 3D collision object")
+	bullet3d.rigid_body.set_gravity(self.physics_body, vmath.vector3())
+	bullet3d.rigid_body.set_linear_factor(self.physics_body, vmath.vector3(1.0, 0.0, 1.0))
+	bullet3d.rigid_body.set_angular_factor(self.physics_body, vmath.vector3())
+	self.blocked = false
+	self.blocked_by_tree = false
+	self.blocked_by = ""
+	self.contact_count = 0
+	self.test_drive_enabled = false
+	self.test_drive_x = 0.0
+	self.test_drive_z = 0.0
+	self.test_drive_remaining = 0.0
 	self.publish_elapsed = 1.0
 	automation_bridge.annotate(tostring(msg.url("#art")), {
 		automation_id = "player_art",
@@ -71,16 +71,24 @@ function init(self)
 	automation_bridge.command("prototype.set_player_position", function(data)
 		assert(type(data.x) == "number", "x must be a number")
 		assert(type(data.z) == "number", "z must be a number")
+		-- Deterministic test placement also clears any key whose release was lost
+		-- when a previous engine/window was stopped while input was held.
+		self.left, self.right, self.up, self.down = false, false, false, false
 		local position = vmath.vector3(
-			clamp(data.x, MIN_X, MAX_X),
-			go.get_position().y,
-			clamp(data.z, MIN_Z, MAX_Z)
+			data.x,
+			0.0,
+			data.z
 		)
-		local blocked
-		position, blocked = resolve_tree_collision(position)
-		go.set_position(position)
-		publish_state(self, blocked)
-		return { x = position.x, z = position.z, blocked_by_tree = blocked }
+		bullet3d.collision_object.set_position(self.physics_object, position)
+		bullet3d.rigid_body.set_linear_velocity(self.physics_body, vmath.vector3())
+		bullet3d.rigid_body.set_angular_velocity(self.physics_body, vmath.vector3())
+		bullet3d.collision_object.activate(self.physics_object, true)
+		self.blocked = false
+		self.blocked_by_tree = false
+		self.blocked_by = ""
+		self.contact_count = 0
+		publish_state(self)
+		return { x = position.x, z = position.z }
 	end)
 	automation_bridge.describe("command", "prototype.set_player_position", {
 		description = "Place the player for deterministic depth, collision, and shadow checks.",
@@ -90,30 +98,92 @@ function init(self)
 			required = { "x", "z" },
 		},
 	})
-	automation_bridge.describe("state", "prototype.player", {
-		description = "Player position, movement state, and trunk collision result.",
+	automation_bridge.command("prototype.set_test_drive", function(data)
+		self.test_drive_enabled = data.enabled == true
+		self.test_drive_x = type(data.x) == "number" and data.x or 0.0
+		self.test_drive_z = type(data.z) == "number" and data.z or 0.0
+		-- A diagnostic run must never leave normal keyboard input disabled if its
+		-- client disconnects or is interrupted partway through a test.
+		self.test_drive_remaining = self.test_drive_enabled and math.max(0.1, data.seconds or 5.0) or 0.0
+		return {
+			enabled = self.test_drive_enabled,
+			x = self.test_drive_x,
+			z = self.test_drive_z,
+			seconds = self.test_drive_remaining,
+		}
+	end)
+	automation_bridge.describe("command", "prototype.set_test_drive", {
+		description = "Override movement axes for deterministic physics verification; normal input is unchanged while disabled.",
+		input_schema = {
+			type = "object",
+			properties = {
+				enabled = { type = "boolean" },
+				x = { type = "number" },
+				z = { type = "number" },
+				seconds = { type = "number", minimum = 0.1, maximum = 30.0 },
+			},
+			required = { "enabled" },
+		},
 	})
-	publish_state(self, false)
+	automation_bridge.describe("state", "prototype.player", {
+		description = "Player position, movement state, and real 3D physics contact result.",
+	})
+	publish_state(self)
 end
 
 function update(self, dt)
-	local x = (self.right and 1 or 0) - (self.left and 1 or 0)
-	local z = (self.down and 1 or 0) - (self.up and 1 or 0)
-	local blocked = false
-	if x ~= 0 or z ~= 0 then
-		local length = math.sqrt(x * x + z * z)
-		local position = go.get_position()
-		position.x = clamp(position.x + x / length * self.speed * dt, MIN_X, MAX_X)
-		position.z = clamp(position.z + z / length * self.speed * dt, MIN_Z, MAX_Z)
-		position, blocked = resolve_tree_collision(position)
-		go.set_position(position)
-	end
-
 	self.publish_elapsed = self.publish_elapsed + dt
 	if self.publish_elapsed >= 0.1 then
 		self.publish_elapsed = self.publish_elapsed - 0.1
-		publish_state(self, blocked)
+		publish_state(self)
 	end
+end
+
+function fixed_update(self, dt)
+	self.blocked = false
+	self.blocked_by_tree = false
+	self.blocked_by = ""
+	self.contact_count = 0
+	if self.test_drive_enabled then
+		self.test_drive_remaining = self.test_drive_remaining - dt
+		if self.test_drive_remaining <= 0.0 then
+			self.test_drive_enabled = false
+			self.test_drive_x = 0.0
+			self.test_drive_z = 0.0
+		end
+	end
+	local x = self.test_drive_enabled and self.test_drive_x or ((self.right and 1 or 0) - (self.left and 1 or 0))
+	local z = self.test_drive_enabled and self.test_drive_z or ((self.down and 1 or 0) - (self.up and 1 or 0))
+	local desired_velocity = vmath.vector3()
+	if x ~= 0 or z ~= 0 then
+		local length = math.sqrt(x * x + z * z)
+		desired_velocity.x = x / length * self.speed
+		desired_velocity.z = z / length * self.speed
+		bullet3d.collision_object.activate(self.physics_object, true)
+	end
+
+	local velocity = bullet3d.rigid_body.get_linear_velocity(self.physics_body)
+	local force = (desired_velocity - velocity) * VELOCITY_GAIN
+	local force_length = vmath.length(force)
+	if force_length > MAX_DRIVE_FORCE then
+		force = force * (MAX_DRIVE_FORCE / force_length)
+	end
+	msg.post("#collision", "apply_force", {
+		force = force,
+		position = bullet3d.collision_object.get_position(self.physics_object),
+	})
+end
+
+function on_message(self, message_id, message)
+	if message_id ~= hash("contact_point_response") or message.other_group ~= WORLD_GROUP then
+		return
+	end
+
+	self.blocked = true
+	self.blocked_by_tree = message.other_id == TREE_ID
+	self.blocked_by = tostring(message.other_id)
+	self.contact_count = self.contact_count + 1
+	publish_state(self)
 end
 
 function on_input(self, action_id, action)

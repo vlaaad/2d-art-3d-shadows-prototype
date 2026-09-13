@@ -1,1 +1,5 @@
 script: "/render/prototype.render_script"
+materials {
+  name: "debug_proxy"
+  material: "/materials/debug_proxy.material"
+}

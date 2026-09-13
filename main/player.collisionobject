@@ -1,0 +1,25 @@
+type: COLLISION_OBJECT_TYPE_DYNAMIC
+mass: 1.0
+friction: 0.0
+restitution: 0.0
+linear_damping: 0.9
+angular_damping: 0.9
+locked_rotation: true
+bullet: true
+group: "player"
+mask: "world"
+event_collision: true
+event_contact: true
+event_trigger: false
+embedded_collision_shape {
+  shapes {
+    shape_type: TYPE_CAPSULE
+    id: "body"
+    position { x: 0.0 y: 0.38 z: 0.0 }
+    rotation { x: 0.0 y: 0.0 z: 0.0 w: 1.0 }
+    index: 0
+    count: 2
+  }
+  data: 0.22
+  data: 0.56
+}

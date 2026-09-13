@@ -1,25 +1,66 @@
 """Render authored proxy alignment views from the editable Blender source.
 
-Run with:
+Run against any authored asset with:
 
-    blender --background --python tools/render_proxy_validation.py
+    blender --background --python tools/render_proxy_validation.py -- \
+      --proxy <object> --art <png> --reference <art-object> \
+      --width <world-width> --height <world-height>
 
-The front overlay uses the exact card framing (bottom-centre pivot and world
-aspect), making root/limb drift visible before testing shadows in Defold.
+The module's ``validate_asset()`` function can also be called in the persistent
+Blender MCP session, validating an unsaved live mesh without export or Defold.
 """
 
 from pathlib import Path
+import argparse
+import hashlib
 import json
 import os
+import re
+import shutil
 import subprocess
+import sys
+import tempfile
 
 import bpy
+import bmesh
 from mathutils import Vector
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BLEND = ROOT / "assets" / "proxies" / "shadow_proxies.blend"
-OUT = Path(os.environ.get("PROXY_VALIDATION_OUT", "/tmp/2d-art-3d-shadows-prototype/proxy-validation"))
+DEFAULT_BLEND = ROOT / "assets" / "proxies" / "shadow_proxies.blend"
+OUT = None
+LAYOUT_RESOLUTION = 384
+PREVIEW_RESOLUTION = 320
+CACHE_VERSION = 1
+CACHE = Path(tempfile.gettempdir()) / "defold-proxy-validation-cache"
+
+
+def project_path(value):
+    path = Path(value)
+    return path if path.is_absolute() else ROOT / path
+
+
+def script_arguments():
+    values = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    parser = argparse.ArgumentParser(
+        description="Render source-art/proxy coverage, contact, volume, and side-shadow validation for one asset."
+    )
+    parser.add_argument("--blend", default=str(DEFAULT_BLEND), help="Blend file containing the authored proxy")
+    parser.add_argument("--proxy", required=True, help="Export proxy object name")
+    parser.add_argument("--art", required=True, help="Transparent source-art path, absolute or project-relative")
+    parser.add_argument("--reference", required=True, help="Blender source-art reference object name")
+    parser.add_argument("--width", required=True, type=float, help="Art card width in world units")
+    parser.add_argument("--height", required=True, type=float, help="Art card height in world units")
+    parser.add_argument("--stem", help="Output filename stem; defaults to the proxy name without _proxy")
+    parser.add_argument("--light-span", type=float, help="Absolute X position for the two side lights")
+    parser.add_argument("--output", help="Output directory; defaults to a new temporary directory")
+    parser.add_argument("--quality", choices=("fast", "review"), default="fast")
+    parser.add_argument("--expected-shells", type=int, default=1, help="Expected disconnected watertight shells")
+    parser.add_argument("--min-art-coverage", type=float, default=0.90, help="Minimum opaque-art fraction covered by the proxy")
+    parser.add_argument("--min-contact-coverage", type=float, default=0.95, help="Minimum contact-region opaque-art fraction covered by the proxy")
+    parser.add_argument("--max-proxy-spill", type=float, default=0.20, help="Maximum proxy fraction outside opaque art")
+    parser.add_argument("--max-contact-spill", type=float, default=0.13, help="Maximum contact-region proxy fraction outside art")
+    return parser.parse_args(values)
 
 
 def point_camera(camera, location, target):
@@ -33,8 +74,7 @@ def hide_everything():
 
 
 def proxy_object(name):
-    collection = bpy.data.collections["EXPORT_PROXIES"]
-    return next(obj for obj in collection.objects if obj.name == name)
+    return bpy.data.objects[name]
 
 
 def ensure_area_light():
@@ -50,14 +90,16 @@ def ensure_area_light():
     return light
 
 
-def ensure_game_camera(target_height):
+def ensure_game_camera(target_width, target_height):
     """Match the direction of main/camera.go, reframed around one asset."""
     camera_data = bpy.data.cameras.get("VALIDATION_GAME_CAMERA") or bpy.data.cameras.new("VALIDATION_GAME_CAMERA")
     camera = bpy.data.objects.get("VALIDATION_GAME_CAMERA") or bpy.data.objects.new("VALIDATION_GAME_CAMERA", camera_data)
     if not camera.users_collection:
         bpy.context.scene.collection.objects.link(camera)
     camera.data.type = "ORTHO"
-    camera.data.ortho_scale = target_height * 1.28
+    # Render previews are square; frame by the larger world dimension so wide
+    # assets such as fences are never clipped or validated with fake heights.
+    camera.data.ortho_scale = max(target_width, target_height) * 1.28
     # Defold (x, y-up, z-ground) maps to Blender (x, -z, y-up).
     # Keep the exact vector from camera (0, 7.8, 10.5) to target
     # (0, 1.25, 0), while only translating the framing target.
@@ -152,15 +194,30 @@ def render_mismatch(art_path, proxy_path, marker_path, output_path, width, heigh
         command.extend(["-format", "%[fx:mean]", "info:"])
         return float(subprocess.run(command, check=True, capture_output=True, text=True).stdout)
 
-    contact_y = round(height * 0.65)
+    bounds_text = subprocess.run(
+        ["magick", str(art_mask), "-trim", "-format", "%@", "info:"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    bounds_match = re.fullmatch(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", bounds_text)
+    if bounds_match:
+        _bounds_width, bounds_height, _bounds_x, bounds_y = map(int, bounds_match.groups())
+        contact_y = max(0, min(height - 1, bounds_y + round(bounds_height * 0.65)))
+    else:
+        contact_y = round(height * 0.65)
     contact_crop = f"{width}x{height - contact_y}+0+{contact_y}"
     proxy_mean = mask_mean(proxy_mask)
     outside_mean = mask_mean(mesh_only_mask)
+    art_mean = mask_mean(art_mask)
+    art_only_mean = mask_mean(art_only_mask)
     contact_proxy_mean = mask_mean(proxy_mask, contact_crop)
     contact_outside_mean = mask_mean(mesh_only_mask, contact_crop)
+    contact_art_mean = mask_mean(art_mask, contact_crop)
+    contact_art_only_mean = mask_mean(art_only_mask, contact_crop)
     metrics = {
         "proxy_outside_art_fraction": outside_mean / max(proxy_mean, 1e-8),
         "contact_proxy_outside_art_fraction": contact_outside_mean / max(contact_proxy_mean, 1e-8),
+        "art_covered_by_proxy_fraction": 1.0 - art_only_mean / max(art_mean, 1e-8),
+        "contact_art_covered_by_proxy_fraction": 1.0 - contact_art_only_mean / max(contact_art_mean, 1e-8),
     }
 
     if marker_path:
@@ -176,27 +233,52 @@ def render_mismatch(art_path, proxy_path, marker_path, output_path, width, heigh
     return metrics
 
 
-def authored_reference(collection_name):
-    collection = bpy.data.collections[collection_name]
-    return next(obj for obj in collection.objects if obj.name.endswith("REFERENCE_DO_NOT_EXPORT"))
+def authored_reference(reference_name):
+    return bpy.data.objects[reference_name]
 
 
-def render_game_layout(proxy_name, collection_name, width, height, stem):
+def render_game_layout(proxy_name, reference_name, width, height, stem):
     """Render art and proxy at the same origin using the gameplay camera."""
-    camera = ensure_game_camera(height)
+    camera = ensure_game_camera(width, height)
     bpy.context.scene.camera = camera
     ensure_area_light()
     render = bpy.context.scene.render
     render.engine = "BLENDER_EEVEE"
     render.film_transparent = True
-    render.resolution_x = 800
-    render.resolution_y = 800
+    render.resolution_x = LAYOUT_RESOLUTION
+    render.resolution_y = LAYOUT_RESOLUTION
     render.resolution_percentage = 100
     render.image_settings.file_format = "PNG"
 
     proxy = proxy_object(proxy_name)
-    reference = authored_reference(collection_name)
-    markers = make_pivot_marker(width)
+    reference = authored_reference(reference_name)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    image_sources = []
+    for material in reference.data.materials:
+        if material and material.use_nodes:
+            for node in material.node_tree.nodes:
+                if node.type == "TEX_IMAGE" and node.image:
+                    path = Path(bpy.path.abspath(node.image.filepath))
+                    image_sources.append((str(path), path.stat().st_mtime_ns if path.exists() else None))
+    cache_data = json.dumps({
+        "version": CACHE_VERSION,
+        "reference": reference_name,
+        "reference_matrix": [round(value, 8) for row in reference.matrix_world for value in row],
+        "reference_vertices": [tuple(round(value, 8) for value in vertex.co) for vertex in reference.data.vertices],
+        "reference_uvs": [
+            tuple(round(value, 8) for value in loop.uv)
+            for layer in reference.data.uv_layers
+            for loop in layer.data
+        ],
+        "image_sources": image_sources,
+        "width": width,
+        "height": height,
+        "resolution": render.resolution_x,
+    }, sort_keys=True).encode()
+    cache_key = hashlib.sha256(cache_data).hexdigest()[:20]
+    cached_art = CACHE / f"{cache_key}-art.png"
+    cached_marker = CACHE / f"{cache_key}-pivot.png"
+    markers = []
 
     hide_everything()
     proxy.hide_render = False
@@ -212,24 +294,33 @@ def render_game_layout(proxy_name, collection_name, width, height, stem):
     for material in old_materials:
         proxy.data.materials.append(material)
 
-    hide_everything()
-    camera.hide_render = False
-    ensure_area_light()
-    reference.hide_render = False
-    # Authored reference geometry is parked 0.64 units behind the edit mesh;
-    # this temporary object translation puts its card plane at runtime depth 0.
-    reference.location.y = -0.64
     art_path = OUT / f"{stem}-game-art.png"
-    render.filepath = str(art_path)
-    bpy.ops.render.render(write_still=True)
+    if cached_art.exists():
+        shutil.copyfile(cached_art, art_path)
+    else:
+        hide_everything()
+        camera.hide_render = False
+        ensure_area_light()
+        reference.hide_render = False
+        # Authored reference geometry is parked 0.64 units behind the edit mesh;
+        # this temporary object translation puts its card plane at runtime depth 0.
+        reference.location.y = -0.64
+        render.filepath = str(art_path)
+        bpy.ops.render.render(write_still=True)
+        shutil.copyfile(art_path, cached_art)
 
-    hide_everything()
-    camera.hide_render = False
-    for marker in markers:
-        marker.hide_render = False
     marker_path = OUT / f"{stem}-game-pivot.png"
-    render.filepath = str(marker_path)
-    bpy.ops.render.render(write_still=True)
+    if cached_marker.exists():
+        shutil.copyfile(cached_marker, marker_path)
+    else:
+        markers = make_pivot_marker(width)
+        hide_everything()
+        camera.hide_render = False
+        for marker in markers:
+            marker.hide_render = False
+        render.filepath = str(marker_path)
+        bpy.ops.render.render(write_still=True)
+        shutil.copyfile(marker_path, cached_marker)
 
     translucent_path = OUT / f"{stem}-game-proxy-translucent.png"
     overlay_path = OUT / f"{stem}-game-layout-overlay.png"
@@ -280,13 +371,7 @@ def render_game_layout(proxy_name, collection_name, width, height, stem):
         if data.users == 0:
             bpy.data.meshes.remove(data)
 
-    # A proxy spilling outside the painted contact patch creates the most
-    # obvious floating/double-root shadow. Fail before launching Defold.
-    if metrics["contact_proxy_outside_art_fraction"] > 0.13:
-        raise RuntimeError(
-            f"{stem} contact mismatch is {metrics['contact_proxy_outside_art_fraction']:.1%}; "
-            "adjust the authored Blender proxy before runtime validation"
-        )
+    return metrics
 
 
 def render_front(proxy_name, art_path, width, height, stem):
@@ -339,7 +424,7 @@ def render_front(proxy_name, art_path, width, height, stem):
     translucent_path.unlink()
 
 
-def render_three_quarter(proxy_name, stem, target_height):
+def render_three_quarter(proxy_name, stem, target_width, target_height):
     hide_everything()
     proxy = proxy_object(proxy_name)
     proxy.hide_render = False
@@ -349,7 +434,7 @@ def render_three_quarter(proxy_name, stem, target_height):
     if not camera.users_collection:
         bpy.context.scene.collection.objects.link(camera)
     camera.data.type = "ORTHO"
-    camera.data.ortho_scale = target_height * 1.18
+    camera.data.ortho_scale = max(target_width, target_height) * 1.18
     point_camera(camera, (5.8, -7.4, 4.8), (0.0, 0.0, target_height * 0.47))
     camera.hide_render = False
     bpy.context.scene.camera = camera
@@ -357,15 +442,15 @@ def render_three_quarter(proxy_name, stem, target_height):
     render.engine = "BLENDER_EEVEE"
     render.film_transparent = False
     bpy.context.scene.world.color = (0.025, 0.035, 0.055)
-    render.resolution_x = 800
-    render.resolution_y = 800
+    render.resolution_x = PREVIEW_RESOLUTION
+    render.resolution_y = PREVIEW_RESOLUTION
     render.resolution_percentage = 100
     render.image_settings.file_format = "PNG"
     render.filepath = str(OUT / f"{stem}-proxy-volume.png")
     bpy.ops.render.render(write_still=True)
 
 
-def render_shadow_preview(proxy_name, collection_name, stem, target_height, light_x):
+def render_shadow_preview(proxy_name, reference_name, stem, target_width, target_height, light_x):
     """Render the 2D source with a proxy-only side shadow, without Defold."""
     for obj in list(bpy.data.objects):
         if obj.name.startswith("VALIDATION_SHADOW_"):
@@ -377,7 +462,7 @@ def render_shadow_preview(proxy_name, collection_name, stem, target_height, ligh
                 elif isinstance(data, bpy.types.Light):
                     bpy.data.lights.remove(data)
 
-    camera = ensure_game_camera(target_height)
+    camera = ensure_game_camera(target_width, target_height)
     bpy.context.scene.camera = camera
     bpy.ops.mesh.primitive_plane_add(size=18, location=(0.0, 0.0, -0.012))
     ground = bpy.context.view_layer.objects.active
@@ -401,7 +486,7 @@ def render_shadow_preview(proxy_name, collection_name, stem, target_height, ligh
     light.hide_render = False
     proxy = proxy_object(proxy_name)
     proxy.hide_render = False
-    reference = authored_reference(collection_name)
+    reference = authored_reference(reference_name)
     reference.hide_render = False
     old_proxy_camera = proxy.visible_camera
     old_reference_shadow = reference.visible_shadow
@@ -412,8 +497,8 @@ def render_shadow_preview(proxy_name, collection_name, stem, target_height, ligh
     render = scene.render
     render.engine = "BLENDER_EEVEE"
     render.film_transparent = False
-    render.resolution_x = 800
-    render.resolution_y = 800
+    render.resolution_x = PREVIEW_RESOLUTION
+    render.resolution_y = PREVIEW_RESOLUTION
     render.resolution_percentage = 100
     render.image_settings.file_format = "PNG"
     scene.world.color = (0.09, 0.12, 0.07)
@@ -433,15 +518,143 @@ def render_shadow_preview(proxy_name, collection_name, stem, target_height, ligh
                 bpy.data.lights.remove(data)
 
 
-if __name__ == "__main__":
-    bpy.ops.wm.open_mainfile(filepath=str(BLEND))
+def topology(proxy):
+    obj = proxy_object(proxy)
+    if obj.type != "MESH":
+        raise RuntimeError(f"{proxy} must be a mesh")
+    mesh = bmesh.new()
+    mesh.from_mesh(obj.data)
+    unseen = set(mesh.verts)
+    component_count = 0
+    while unseen:
+        component_count += 1
+        stack = [unseen.pop()]
+        while stack:
+            vertex = stack.pop()
+            for edge in vertex.link_edges:
+                neighbor = edge.other_vert(vertex)
+                if neighbor in unseen:
+                    unseen.remove(neighbor)
+                    stack.append(neighbor)
+    result = {
+        "components": component_count,
+        "non_manifold_edges": sum(1 for edge in mesh.edges if not edge.is_manifold),
+        "vertices": len(mesh.verts),
+        "faces": len(mesh.faces),
+        "material_slots": [material.name if material else None for material in obj.data.materials],
+    }
+    mesh.free()
+    return result
+
+
+def validate_asset(proxy, art, reference, width, height, stem=None, light_span=None, output=None,
+                   quality="fast", expected_shells=1, min_art_coverage=0.90,
+                   min_contact_coverage=0.95,
+                   max_proxy_spill=0.20, max_contact_spill=0.13):
+    """Validate one live Blender proxy and return paths/metrics without exporting it."""
+    global OUT, LAYOUT_RESOLUTION, PREVIEW_RESOLUTION
+    LAYOUT_RESOLUTION, PREVIEW_RESOLUTION = (640, 480) if quality == "review" else (384, 320)
+    OUT = Path(output) if output else Path(tempfile.mkdtemp(prefix="defold-proxy-validation-"))
     OUT.mkdir(parents=True, exist_ok=True)
-    render_front("tree_proxy", "assets/textures/tree.png", 3.7, 4.2, "tree")
-    render_front("character_proxy", "assets/textures/character.png", 1.15, 1.72, "character")
-    render_three_quarter("tree_proxy", "tree", 4.2)
-    render_three_quarter("character_proxy", "character", 1.72)
-    render_game_layout("tree_proxy", "TREE_PROXY_AUTHORED", 3.7, 4.2, "tree")
-    render_game_layout("character_proxy", "CHARACTER_PROXY_AUTHORED", 1.15, 1.72, "character")
-    render_game_layout("grass_proxy", "GRASS_PROXY_AUTHORED", 1.45, 0.72, "grass")
-    render_shadow_preview("tree_proxy", "TREE_PROXY_AUTHORED", "tree", 4.2, -6.0)
-    render_shadow_preview("tree_proxy", "TREE_PROXY_AUTHORED", "tree", 4.2, 6.0)
+    stem = stem or proxy.removesuffix("_proxy")
+    light_span = light_span or max(width * 1.6, 2.0)
+    art_path = project_path(art)
+
+    scene = bpy.context.scene
+    topology_data = topology(proxy)
+    failures = []
+    if topology_data["components"] != expected_shells:
+        failures.append(
+            f"{proxy} has {topology_data['components']} disconnected shells; expected {expected_shells}"
+        )
+    if topology_data["non_manifold_edges"]:
+        failures.append(f"{proxy} has {topology_data['non_manifold_edges']} non-manifold edges")
+    if topology_data["material_slots"] != ["proxy"]:
+        failures.append(f"{proxy} material slots must be exactly ['proxy']; got {topology_data['material_slots']}")
+
+    old_camera = scene.camera
+    old_world_color = tuple(scene.world.color)
+    old_render_samples = scene.eevee.taa_render_samples
+    scene.eevee.taa_render_samples = 1 if quality == "fast" else 4
+    old_hidden = {obj.name: obj.hide_render for obj in scene.objects}
+    reference_object = authored_reference(reference)
+    old_reference_location = reference_object.location.copy()
+    try:
+        metrics = render_game_layout(proxy, reference, width, height, stem)
+        checks = ["game_layout_coverage", "ground_contact"]
+        if quality == "review":
+            render_three_quarter(proxy, stem, width, height)
+            render_shadow_preview(proxy, reference, stem, width, height, -light_span)
+            render_shadow_preview(proxy, reference, stem, width, height, light_span)
+            checks.extend(("volume", "left_shadow", "right_shadow"))
+    finally:
+        reference_object.location = old_reference_location
+        scene.camera = old_camera
+        scene.world.color = old_world_color
+        scene.eevee.taa_render_samples = old_render_samples
+        for name, hidden in old_hidden.items():
+            obj = bpy.data.objects.get(name)
+            if obj:
+                obj.hide_render = hidden
+
+    summary = {
+        "asset": stem,
+        "proxy": proxy,
+        "source_art": str(art_path),
+        "output_directory": str(OUT),
+        "quality": quality,
+        "checks": checks,
+        "metrics": metrics,
+        "topology": topology_data,
+    }
+    if metrics["art_covered_by_proxy_fraction"] < min_art_coverage:
+        failures.append(
+            f"{proxy} covers {metrics['art_covered_by_proxy_fraction']:.1%} of opaque art; "
+            f"required {min_art_coverage:.1%}"
+        )
+    if metrics["contact_art_covered_by_proxy_fraction"] < min_contact_coverage:
+        failures.append(
+            f"{proxy} covers {metrics['contact_art_covered_by_proxy_fraction']:.1%} of contact art; "
+            f"required {min_contact_coverage:.1%}"
+        )
+    if metrics["proxy_outside_art_fraction"] > max_proxy_spill:
+        failures.append(
+            f"{proxy} spills {metrics['proxy_outside_art_fraction']:.1%} outside opaque art; "
+            f"maximum {max_proxy_spill:.1%}"
+        )
+    if metrics["contact_proxy_outside_art_fraction"] > max_contact_spill:
+        failures.append(
+            f"{proxy} contact spill is {metrics['contact_proxy_outside_art_fraction']:.1%}; "
+            f"maximum {max_contact_spill:.1%}"
+        )
+    summary["passed"] = not failures
+    summary["failures"] = failures
+    (OUT / "validation-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    return summary
+
+
+if __name__ == "__main__":
+    args = script_arguments()
+    blend = project_path(args.blend)
+    if Path(bpy.data.filepath) != blend:
+        bpy.ops.wm.open_mainfile(filepath=str(blend))
+    output = args.output or os.environ.get("PROXY_VALIDATION_OUT")
+    summary = validate_asset(
+        proxy=args.proxy,
+        art=args.art,
+        reference=args.reference,
+        width=args.width,
+        height=args.height,
+        stem=args.stem,
+        light_span=args.light_span,
+        output=output,
+        quality=args.quality,
+        expected_shells=args.expected_shells,
+        min_art_coverage=args.min_art_coverage,
+        min_contact_coverage=args.min_contact_coverage,
+        max_proxy_spill=args.max_proxy_spill,
+        max_contact_spill=args.max_contact_spill,
+    )
+    print("PROXY_VALIDATION_RESULT=" + json.dumps(summary, sort_keys=True))
+    if not summary["passed"]:
+        raise SystemExit(2)

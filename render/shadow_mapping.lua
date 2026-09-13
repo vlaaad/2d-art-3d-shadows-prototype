@@ -39,8 +39,12 @@ function M.init(target_name)
 		constants = render.constant_buffer(),
 		polygon_offset_factor = 2.0,
 		polygon_offset_units = 4.0,
+		projection_width = 24.0,
+		projection_height = 18.0,
+		near_z = 0.1,
+		far_z = 30.0,
 	}
-	context.constants.shadow_params = vmath.vector4(3.0, 1.0, 0.0008, 0.002)
+	context.constants.shadow_params = vmath.vector4(3.0, 1.0, 0.0015, 0.004)
 	context.constants.sun_direction = vmath.vector4(-0.5, -0.8, -0.3, 0.0)
 	context.constants.day_tint = vmath.vector4(1.0, 1.0, 1.0, 1.0)
 	context.constants.lighting = vmath.vector4(0.35, 0.75, 0.58, 1.0)
@@ -68,11 +72,15 @@ function M.on_message(context, message_id, message)
 		end
 		context.polygon_offset_factor = message.polygon_offset_factor or 2.0
 		context.polygon_offset_units = message.polygon_offset_units or 4.0
+		context.projection_width = message.projection_width or context.projection_width
+		context.projection_height = message.projection_height or context.projection_height
+		context.near_z = message.near_z or context.near_z
+		context.far_z = message.far_z or context.far_z
 		context.constants.shadow_params = vmath.vector4(
 			message.pcf_kernel_size or 3.0,
 			message.pcf_sample_spacing or 1.0,
-			message.receiver_min_bias or 0.0008,
-			message.receiver_slope_bias or 0.002
+			message.receiver_min_bias or 0.0015,
+			message.receiver_slope_bias or 0.004
 		)
 		return true
 	elseif message_id == MSG_SET_LIGHTING then
@@ -90,7 +98,16 @@ function M.render_depth(context, caster_predicate)
 	end
 
 	local view = camera.get_view(context.camera)
-	local projection = camera.get_projection(context.camera)
+	-- The camera component's fixed zoom is pixel-based and changes its world
+	-- extents when the window is resized. Use an explicit, generously padded
+	-- world-space frustum so the shadow map cannot be sliced by window size.
+	local half_width = context.projection_width * 0.5
+	local half_height = context.projection_height * 0.5
+	local projection = vmath.matrix4_orthographic(
+		-half_width, half_width,
+		-half_height, half_height,
+		context.near_z, context.far_z
+	)
 	local frustum = projection * view
 	context.constants.mtx_shadow = context.clip_to_texture * frustum
 

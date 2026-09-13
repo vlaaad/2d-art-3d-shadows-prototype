@@ -1,0 +1,22 @@
+type: COLLISION_OBJECT_TYPE_STATIC
+mass: 0.0
+friction: 0.0
+restitution: 0.0
+group: "world"
+mask: "player"
+embedded_collision_shape {
+  shapes {
+    shape_type: TYPE_MESH
+    position {
+    }
+    rotation {
+    }
+    index: 0
+    count: 0
+    id: "proxy"
+    mesh_scene: "/assets/meshes/tree_proxy.glb"
+    mesh_name: "tree_proxy_mesh"
+    mesh_index: 0
+  }
+}
+event_trigger: false

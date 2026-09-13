@@ -20,12 +20,18 @@ max_instances = 640
 [model]
 max_count = 1100
 
+[graphics]
+max_debug_vertices = 200000
+
 [android]
 input_method = HiddenInputField
 
 [physics]
+type = 3D
 gravity_y = -1000.0
 scale = 0.01
+max_debug_vertices = 50000
+use_fixed_timestep = 1
 
 [html5]
 scale_mode = stretch

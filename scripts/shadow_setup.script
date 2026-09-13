@@ -4,11 +4,15 @@ function init(self)
 	msg.post("@render:", "set_directional_shadow", {
 		camera = msg.url("#shadow_camera"),
 		resolution = self.resolution,
+		projection_width = 24.0,
+		projection_height = 18.0,
+		near_z = 0.1,
+		far_z = 30.0,
 		pcf_kernel_size = 5,
-		pcf_sample_spacing = 0.9,
+		pcf_sample_spacing = 2.5,
 		polygon_offset_factor = 2.0,
 		polygon_offset_units = 4.0,
-		receiver_min_bias = 0.0008,
-		receiver_slope_bias = 0.002,
+		receiver_min_bias = 0.0015,
+		receiver_slope_bias = 0.004,
 	})
 end

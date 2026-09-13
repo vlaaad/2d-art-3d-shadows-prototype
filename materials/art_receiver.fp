@@ -35,36 +35,39 @@ void main()
 		discard;
 	}
 
+	// Every surface-map texel describes a valid receiver. Proxy hits contain the
+	// baked surface normal/depth; misses explicitly contain the card-plane normal
+	// and zero depth. Linear filtering can therefore make a continuous transition
+	// without ever mixing receiver data with a transparent-black sentinel.
 	vec4 surface_data = texture(surface_map, var_texcoord0);
 	highp vec4 receiver_shadow_coord = var_shadow_coord;
-	vec3 receiver_normal = normalize(var_world_normal);
-	bool has_proxy_surface = surface_data.a > 0.002;
-	if (has_proxy_surface)
-	{
-		float encoded_depth = clamp((surface_data.a - (1.0 / 255.0)) / (254.0 / 255.0), 0.0, 1.0);
-		float surface_depth = mix(-1.0, 2.5, encoded_depth);
-		receiver_shadow_coord += var_shadow_ray * surface_depth;
-		vec3 local_normal = surface_data.rgb * 2.0 - 1.0;
-		receiver_normal = normalize(
-			local_normal.x * var_normal_x +
-			local_normal.y * var_normal_y +
-			local_normal.z * var_normal_z);
-	}
+	float encoded_depth = clamp((surface_data.a - (1.0 / 255.0)) / (254.0 / 255.0), 0.0, 1.0);
+	float surface_depth = mix(-1.0, 2.5, encoded_depth);
+	receiver_shadow_coord += var_shadow_ray * surface_depth;
+	vec3 local_normal = surface_data.rgb * 2.0 - 1.0;
+	vec3 receiver_normal = normalize(
+		local_normal.x * var_normal_x +
+		local_normal.y * var_normal_y +
+		local_normal.z * var_normal_z);
 
 	vec3 direction_to_light = -normalize(sun_direction.xyz);
 	float n_dot_l = max(dot(receiver_normal, direction_to_light), 0.0);
 	float wrapped_diffuse = 0.72 + 0.28 * n_dot_l;
 	float illumination = lighting.x + lighting.y * wrapped_diffuse;
-	// Unmatched pixels fall back to the card plane. This is the original robust
-	// receiver path: it preserves shadows crossing between different objects.
+	// Explicit card-plane texels still use the same world-space shadow lookup,
+	// preserving shadows that cross between different objects.
 	float visibility = directional_shadow_visibility(
 		shadow_map,
 		receiver_shadow_coord,
-		shadow_texel_size.xy * 1.75,
+		shadow_texel_size.xy,
 		shadow_params,
 		receiver_normal,
 		direction_to_light
 	);
+	// Painted assets already contain local form shading. Keep dynamic shadows
+	// readable without letting dense proxy lobes blacken the crown. This applies
+	// identically to tree, character, and grass, including cross-object shadows.
+	visibility = mix(1.0, visibility, 0.72);
 	float shadow = 1.0 - lighting.z * (1.0 - visibility);
 
 	out_fragColor = vec4(color.rgb * day_tint.rgb * illumination * shadow, color.a);

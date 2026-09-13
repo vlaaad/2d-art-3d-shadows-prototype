@@ -6,3 +6,7 @@ components {
   id: "shadow_proxy"
   component: "/assets/models/tree_proxy.model"
 }
+components {
+  id: "collision"
+  component: "/main/tree.collisionobject"
+}

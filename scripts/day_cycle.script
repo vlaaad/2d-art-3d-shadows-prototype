@@ -3,6 +3,42 @@ go.property("cycle_seconds", 10.0)
 local TAU = math.pi * 2.0
 local ACTION_PAUSE = hash("key_space")
 local ACTION_RESET = hash("key_r")
+local ACTION_PROFILER = hash("key_tilde")
+local ACTION_PROFILER_BACKQUOTE = hash("key_backquote")
+local ACTION_PROFILER_GRAVE = hash("key_grave")
+local ACTION_PROXY_DEBUG = hash("key_f2")
+local ACTION_PHYSICS_DEBUG = hash("key_f3")
+
+local function annotate_asset(instance, role)
+	automation_bridge.annotate("main:/" .. instance .. "#art", {
+		automation_id = instance .. "_art",
+		role = role,
+	})
+	automation_bridge.annotate("main:/" .. instance .. "#shadow_proxy", {
+		automation_id = instance .. "_shadow_proxy",
+		role = "shadow_caster",
+	})
+end
+
+local function set_proxy_debug(self, enabled)
+	self.proxy_debug = enabled == true
+	msg.post("@render:", "toggle_proxy_debug", { enabled = self.proxy_debug })
+	automation_bridge.publish("prototype.debug", {
+		proxy_models_visible = self.proxy_debug,
+		physics_colliders_visible = self.physics_debug,
+	})
+end
+
+local function set_physics_debug(self, enabled)
+	if self.physics_debug ~= (enabled == true) then
+		msg.post("@system:", "toggle_physics_debug")
+	end
+	self.physics_debug = enabled == true
+	automation_bridge.publish("prototype.debug", {
+		proxy_models_visible = self.proxy_debug,
+		physics_colliders_visible = self.physics_debug,
+	})
+end
 
 local function clamp(value, minimum, maximum)
 	return math.max(minimum, math.min(maximum, value))
@@ -36,11 +72,15 @@ local function apply_cycle(self)
 	local daylight = clamp(0.5 + 0.5 * math.cos(angle - math.pi * 0.5), 0.0, 1.0)
 	daylight = daylight * daylight * (3.0 - 2.0 * daylight)
 
+	-- Keep the original constant-radius orbit, rotated 45 degrees so dawn and
+	-- sunset light arrive diagonally. A single gentle sine varies the height
+	-- without clamps, joins, an overhead singularity, or an underground sun.
 	local radius = 10.0
+	local azimuth = angle + math.pi * 0.25
 	local sun_position = vmath.vector3(
-		math.cos(angle) * radius,
-		5.5 + daylight * 3.5,
-		math.sin(angle) * radius
+		math.cos(azimuth) * radius,
+		5.5 + 3.5 * math.sin(angle),
+		math.sin(azimuth) * radius
 	)
 	local target = vmath.vector3(0.0, 0.0, 0.0)
 	local direction = vmath.normalize(target - sun_position)
@@ -56,7 +96,10 @@ local function apply_cycle(self)
 	local sky = mix_color(sky_night, sky_day, daylight)
 	local ambient = mix(0.42, 0.46, daylight)
 	local diffuse = mix(0.12, 0.68, daylight)
-	local shadow_strength = mix(0.22, 0.46, daylight)
+	-- Scene illumination and tint create the day/night transition. Keeping the
+	-- relative shadow contrast stable avoids objects appearing less shadowed at
+	-- night even while the whole scene becomes darker.
+	local shadow_strength = 0.36
 
 	msg.post("@render:", "set_day_lighting", {
 		sun_direction = vmath.vector4(direction.x, direction.y, direction.z, 0.0),
@@ -71,15 +114,13 @@ function init(self)
 	msg.post(".", "acquire_input_focus")
 	self.phase = 0.18
 	self.paused = false
+	self.proxy_debug = false
+	self.physics_debug = false
 	self.publish_elapsed = 1.0
-	automation_bridge.annotate("main:/tree#art", {
-		automation_id = "tree_art",
-		role = "tree",
-	})
-	automation_bridge.annotate("main:/tree#shadow_proxy", {
-		automation_id = "tree_shadow_proxy",
-		role = "shadow_caster",
-	})
+	annotate_asset("tree", "tree")
+	annotate_asset("barrel", "prop")
+	annotate_asset("boulder", "prop")
+	annotate_asset("fence", "prop")
 
 	automation_bridge.command("prototype.set_time", function(data)
 		assert(type(data.phase) == "number", "phase must be a number")
@@ -104,6 +145,24 @@ function init(self)
 	automation_bridge.describe("state", "prototype.day_cycle", {
 		description = "Current time-of-day phase and lighting period.",
 	})
+	automation_bridge.command("prototype.set_proxy_debug", function(data)
+		set_proxy_debug(self, data.enabled)
+		return { proxy_models_visible = self.proxy_debug }
+	end)
+	automation_bridge.describe("command", "prototype.set_proxy_debug", {
+		description = "Show or hide the translucent runtime shadow/collision proxies.",
+		input_schema = { type = "object", properties = { enabled = { type = "boolean" } }, required = { "enabled" } },
+	})
+	set_proxy_debug(self, false)
+	automation_bridge.command("prototype.set_physics_debug", function(data)
+		set_physics_debug(self, data.enabled)
+		return { physics_colliders_visible = self.physics_debug }
+	end)
+	automation_bridge.describe("command", "prototype.set_physics_debug", {
+		description = "Show or hide Defold's runtime 3D collider and contact-normal debug drawing.",
+		input_schema = { type = "object", properties = { enabled = { type = "boolean" } }, required = { "enabled" } },
+	})
+	set_physics_debug(self, false)
 
 	local daylight = apply_cycle(self)
 	publish_state(self, daylight)
@@ -127,5 +186,11 @@ function on_input(self, action_id, action)
 	elseif action_id == ACTION_RESET and action.pressed then
 		self.phase = 0.18
 		self.paused = false
+	elseif (action_id == ACTION_PROFILER or action_id == ACTION_PROFILER_BACKQUOTE or action_id == ACTION_PROFILER_GRAVE) and action.pressed then
+		msg.post("@system:", "toggle_profile")
+	elseif action_id == ACTION_PROXY_DEBUG and action.pressed then
+		set_proxy_debug(self, not self.proxy_debug)
+	elseif action_id == ACTION_PHYSICS_DEBUG and action.pressed then
+		set_physics_debug(self, not self.physics_debug)
 	end
 end

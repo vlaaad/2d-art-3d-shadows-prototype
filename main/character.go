@@ -10,3 +10,7 @@ components {
   id: "shadow_proxy"
   component: "/assets/models/character_proxy.model"
 }
+components {
+  id: "collision"
+  component: "/main/player.collisionobject"
+}

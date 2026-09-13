@@ -24,9 +24,9 @@ uniform vs_uniforms
 void main()
 {
 	highp vec4 world_position = mtx_world * vec4(position.xyz, 1.0);
-	// Fixed gameplay-camera ray in Defold-local coordinates. Blender bakes
-	// signed distance along the equivalent (0, 10.5, -6.55) ray.
-	highp vec3 local_surface_ray = normalize(vec3(0.0, -6.55, -10.5));
+	// Fixed surface-to-gameplay-camera ray. Blender bakes signed distance along
+	// the equivalent (0, -10.5, 6.55) vector using (x, -z, y) conversion.
+	highp vec3 local_surface_ray = normalize(vec3(0.0, 6.55, 10.5));
 	highp vec3 world_surface_ray = normalize((mtx_world * vec4(local_surface_ray, 0.0)).xyz);
 	var_texcoord0 = texcoord0;
 	var_world_normal = normalize((mtx_normal * vec4(normal, 0.0)).xyz);
