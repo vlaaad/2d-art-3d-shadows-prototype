@@ -19,7 +19,8 @@ local function publish_state(self)
 		z = position.z,
 		vx = velocity.x,
 		vz = velocity.z,
-		moving = self.left or self.right or self.up or self.down,
+		moving = self.left or self.right or self.up or self.down or self.test_drive_enabled,
+		test_drive_enabled = self.test_drive_enabled,
 		blocked = self.blocked == true,
 		blocked_by_tree = self.blocked_by_tree == true,
 		blocked_by = self.blocked_by,
@@ -74,6 +75,8 @@ function init(self)
 		-- Deterministic test placement also clears any key whose release was lost
 		-- when a previous engine/window was stopped while input was held.
 		self.left, self.right, self.up, self.down = false, false, false, false
+		self.test_drive_enabled = false
+		self.test_drive_remaining = 0.0
 		local position = vmath.vector3(
 			data.x,
 			0.0,
@@ -104,7 +107,8 @@ function init(self)
 		self.test_drive_z = type(data.z) == "number" and data.z or 0.0
 		-- A diagnostic run must never leave normal keyboard input disabled if its
 		-- client disconnects or is interrupted partway through a test.
-		self.test_drive_remaining = self.test_drive_enabled and math.max(0.1, data.seconds or 5.0) or 0.0
+		self.test_drive_remaining = self.test_drive_enabled and math.min(30.0, math.max(0.1, data.seconds or 5.0)) or 0.0
+		publish_state(self)
 		return {
 			enabled = self.test_drive_enabled,
 			x = self.test_drive_x,

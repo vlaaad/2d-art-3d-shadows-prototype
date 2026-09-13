@@ -15,11 +15,15 @@ Controls:
 - F3: show/hide Defold 3D physics colliders
 - Backquote/tilde: toggle the profiler
 
-The character uses a kinematic 3D capsule. The tree, barrel, boulder, and fence
+The character uses a force-driven dynamic 3D capsule, with height and rotation locked. The tree, barrel, boulder, and fence
 use their complete authored shadow proxies as static collision meshes. Depth testing lets the character walk
 in front of or behind the tree. The field contains 500 factory-spawned grass
 cards and 500 matching shadow proxies; shared resources and local-space model
 materials allow Defold to instance/batch both passes.
+
+World geometry is authored in metres, so keep `physics.scale = 1.0`. Scaling
+this scene down to `0.01` makes the player capsule smaller than Bullet's contact
+tolerances: sustained movement can enter the prop meshes and become trapped.
 
 Author the proxy and its final runtime art-card transform in the asset's `.blend`
 file. Run validation, export, and receiver baking as one operation:
@@ -71,3 +75,13 @@ UVs, and preservation of an existing map when baking fails:
 ```sh
 blender --background -noaudio --python-exit-code 1 --python tools/test_shadow_baking.py
 ```
+
+Player collision regression checks (with the Defold editor open):
+
+```sh
+PYTHONPATH=automation-bridge-python python3 tools/test_player_collisions.py
+```
+
+These push into the barrel, trunk, boulder, and fence, check for entry into the
+barrel/trunk interiors, and require movement away when the input reverses.
+The game remains open with the player returned to the starting position.
